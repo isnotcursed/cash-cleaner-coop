@@ -124,7 +124,8 @@ local function inventory_targets()
                 if parameter_probe_functions[full_name] then
                     fn:ForEachProperty(function(property)
                         log(string.format("parameter %s class=%s",
-                            property:GetFullName(), property:GetClass():GetFullName()))
+                            property:GetFName():ToString(),
+                            property:GetClass():GetFName():ToString()))
                     end)
                 end
             end)
