@@ -99,3 +99,20 @@ Unreal `FUNC_Net` flag. Relevant callable seams include:
 Derived direction: retain Unreal replication for player/game state where it is
 already enabled, but add an explicit host-authoritative event and snapshot layer
 for interactive objects, inventory, physics ownership, quests, and persistence.
+
+## Pickup parameter probe
+
+The reflected runtime signatures on the compatibility baseline are:
+
+- `Pickup(Objects: ArrayProperty, Type: EnumProperty, Force: BoolProperty) -> BoolProperty`
+- `Grab(Objects: ArrayProperty) -> BoolProperty`
+- `Drop(Object: ObjectProperty, CancelAim: BoolProperty, keepState: BoolProperty,
+  Reason: EnumProperty, combined: BoolProperty)`
+- `Throw(Force: BoolProperty)`
+- `SetIsPickedUp(pickedUp: BoolProperty, grabbed: BoolProperty) -> BoolProperty`
+
+The native mod now registers read-only pre-hooks for `Pickup`, `Grab`, and `Drop`.
+It derives a provisional FNV-1a object ID from the reflected full object name,
+de-duplicates the nested `Pickup`/`Grab` pair for 250 ms, records host-local
+ownership, and sends guest pickup/drop requests through the existing authority
+protocol. It does not yet cancel a guest action or roll it back after denial.

@@ -1,6 +1,7 @@
 #include <DynamicOutput/DynamicOutput.hpp>
 #include <Mod/CppUserModBase.hpp>
 #include <Unreal/AActor.hpp>
+#include <Unreal/UFunctionStructs.hpp>
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/World.hpp>
 #include <ccscoop/net.h>
@@ -11,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
@@ -28,6 +30,19 @@ namespace
     {
         return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
+    }
+
+    auto stable_object_id(RC::Unreal::UObject* object) -> std::uint64_t
+    {
+        if (!object) return 0;
+        const auto name = object->GetFullName();
+        std::uint64_t hash = 14695981039346656037ull;
+        for (const auto character : name)
+        {
+            hash ^= static_cast<std::uint64_t>(character);
+            hash *= 1099511628211ull;
+        }
+        return hash == 0 ? 1 : hash;
     }
 
     class CashCleanerCoopMod final : public RC::CppUserModBase
@@ -70,6 +85,7 @@ namespace
         auto on_unreal_init() -> void override
         {
             unreal_ready_ = true;
+            register_interaction_hooks();
             RC::Output::send(STR("[CashCleanerCoop] Unreal initialized; bootstrap is passive\n"));
         }
 
@@ -98,10 +114,17 @@ namespace
                     {
                         watchdog_.activity(now);
                         if (mode_ == CoopMode::host) handle_object_action(*object_action);
-                        else if (!received_object_action_)
+                        else
                         {
-                            RC::Output::send(STR("[CashCleanerCoop] Object authority response received\n"));
-                            received_object_action_ = true;
+                            auto& lease = object_leases_[object_action->object];
+                            lease.epoch = object_action->epoch;
+                            lease.holder = object_action->kind == ccscoop::ObjectActionKind::pickup_granted
+                                ? object_action->player : 0;
+                            if (!received_object_action_)
+                            {
+                                RC::Output::send(STR("[CashCleanerCoop] Object authority response received\n"));
+                                received_object_action_ = true;
+                            }
                         }
                     }
                     continue;
@@ -203,6 +226,89 @@ namespace
         }
 
       private:
+        struct RawObjectArray
+        {
+            RC::Unreal::UObject** data;
+            std::int32_t count;
+            std::int32_t capacity;
+        };
+
+        struct PickupParams { RawObjectArray objects; };
+        struct DropParams { RC::Unreal::UObject* object; };
+
+        auto register_interaction_hooks() -> void
+        {
+            const RC::Unreal::UnrealScriptFunctionCallable no_op =
+                [](RC::Unreal::UnrealScriptFunctionCallableContext&, void*) {};
+            const auto pickup = RC::Unreal::UObjectGlobals::RegisterHook(
+                STR("/Script/CashCleanerSim.PickupCharacterComponent:Pickup"),
+                [](RC::Unreal::UnrealScriptFunctionCallableContext& context, void* data)
+                {
+                    static_cast<CashCleanerCoopMod*>(data)->on_local_pickup(context.GetParams<PickupParams>().objects);
+                }, no_op, this);
+            const auto grab = RC::Unreal::UObjectGlobals::RegisterHook(
+                STR("/Script/CashCleanerSim.PickupCharacterComponent:Grab"),
+                [](RC::Unreal::UnrealScriptFunctionCallableContext& context, void* data)
+                {
+                    static_cast<CashCleanerCoopMod*>(data)->on_local_pickup(context.GetParams<PickupParams>().objects);
+                }, no_op, this);
+            const auto drop = RC::Unreal::UObjectGlobals::RegisterHook(
+                STR("/Script/CashCleanerSim.PickupCharacterComponent:Drop"),
+                [](RC::Unreal::UnrealScriptFunctionCallableContext& context, void* data)
+                {
+                    static_cast<CashCleanerCoopMod*>(data)->on_local_drop(context.GetParams<DropParams>().object);
+                }, no_op, this);
+            interaction_hooks_ = {pickup, grab, drop};
+            RC::Output::send(STR("[CashCleanerCoop] Pickup/drop bridge hooks registered\n"));
+        }
+
+        auto on_local_pickup(const RawObjectArray& objects) -> void
+        {
+            if (!objects.data || objects.count <= 0 || objects.count > 128 || objects.capacity < objects.count) return;
+            for (std::int32_t index = 0; index < objects.count; ++index)
+            {
+                const auto object = stable_object_id(objects.data[index]);
+                if (object == 0) continue;
+                const auto observed_at = now_ms();
+                auto& previous = local_pickup_ms_[object];
+                if (previous != 0 && observed_at - previous < 250) continue;
+                previous = observed_at;
+                if (mode_ == CoopMode::host)
+                {
+                    auto& lease = object_leases_[object];
+                    if (lease.epoch == 0) lease.epoch = 1;
+                    lease.holder = 1;
+                    ++lease.epoch;
+                }
+                else if (mode_ == CoopMode::join && watchdog_.connected())
+                {
+                    const ccscoop::ObjectAction action{ccscoop::ObjectActionKind::pickup_request,
+                        session_, ++object_request_, object, 2, 0};
+                    endpoint_->send(host_, port_, ccscoop::encode_object_action(action));
+                }
+            }
+            RC::Output::send(STR("[CashCleanerCoop] Local pickup observed\n"));
+        }
+
+        auto on_local_drop(RC::Unreal::UObject* value) -> void
+        {
+            const auto object = stable_object_id(value);
+            if (object == 0) return;
+            auto& lease = object_leases_[object];
+            if (mode_ == CoopMode::host && lease.holder == 1)
+            {
+                lease.holder = 0;
+                ++lease.epoch;
+            }
+            else if (mode_ == CoopMode::join && watchdog_.connected() && lease.holder == 2 && lease.epoch != 0)
+            {
+                const ccscoop::ObjectAction action{ccscoop::ObjectActionKind::drop,
+                    session_, ++object_request_, object, 2, lease.epoch};
+                endpoint_->send(host_, port_, ccscoop::encode_object_action(action));
+            }
+            RC::Output::send(STR("[CashCleanerCoop] Local drop observed\n"));
+        }
+
         auto handle_object_action(const ccscoop::ObjectAction& action) -> void
         {
             const auto duplicate = object_responses_.find(action.request);
@@ -345,6 +451,9 @@ namespace
         struct ObjectLease { std::uint32_t holder{}; std::uint32_t epoch{}; };
         std::unordered_map<std::uint64_t, ObjectLease> object_leases_;
         std::unordered_map<std::uint32_t, ccscoop::ObjectAction> object_responses_;
+        std::unordered_map<std::uint64_t, std::uint64_t> local_pickup_ms_;
+        std::vector<std::pair<int, int>> interaction_hooks_;
+        std::uint32_t object_request_{};
         bool received_object_action_{};
     };
 }
