@@ -23,6 +23,7 @@ namespace {
 constexpr std::array<std::uint8_t, 4> kMagic{{'C', 'C', 'S', 1}};
 constexpr std::size_t kWireSize = 17;
 constexpr std::size_t kTransformSize = 33;
+constexpr std::size_t kObjectActionSize = 30;
 constexpr float kMaxCoordinate = 100000000.0f;
 
 void write_u32(std::vector<std::uint8_t>& out, std::uint32_t value) {
@@ -101,6 +102,34 @@ std::optional<PlayerTransform> decode_player_transform(const std::vector<std::ui
         !std::isfinite(result.yaw) || std::fabs(result.x) > kMaxCoordinate ||
         std::fabs(result.y) > kMaxCoordinate || std::fabs(result.z) > kMaxCoordinate ||
         std::fabs(result.yaw) > 360000.0f) return std::nullopt;
+    return result;
+}
+
+std::vector<std::uint8_t> encode_object_action(const ObjectAction& action) {
+    std::vector<std::uint8_t> out(kMagic.begin(), kMagic.end());
+    out.push_back(static_cast<std::uint8_t>(WireType::object_action));
+    out.push_back(static_cast<std::uint8_t>(action.kind));
+    write_u32(out, action.session);
+    write_u32(out, action.request);
+    write_u64(out, action.object);
+    write_u32(out, action.player);
+    write_u32(out, action.epoch);
+    return out;
+}
+
+std::optional<ObjectAction> decode_object_action(const std::vector<std::uint8_t>& bytes) {
+    if (bytes.size() != kObjectActionSize || !std::equal(kMagic.begin(), kMagic.end(), bytes.begin()) ||
+        bytes[4] != static_cast<std::uint8_t>(WireType::object_action)) return std::nullopt;
+    const auto raw_kind = bytes[5];
+    if (raw_kind < static_cast<std::uint8_t>(ObjectActionKind::pickup_request) ||
+        raw_kind > static_cast<std::uint8_t>(ObjectActionKind::drop)) return std::nullopt;
+    ObjectAction result{static_cast<ObjectActionKind>(raw_kind), read_u32(bytes.data() + 6),
+                        read_u32(bytes.data() + 10), read_u64(bytes.data() + 14),
+                        read_u32(bytes.data() + 22), read_u32(bytes.data() + 26)};
+    if (result.session == 0 || result.request == 0 || result.object == 0 || result.player == 0)
+        return std::nullopt;
+    if (result.kind == ObjectActionKind::pickup_request && result.epoch != 0) return std::nullopt;
+    if (result.kind != ObjectActionKind::pickup_request && result.epoch == 0) return std::nullopt;
     return result;
 }
 

@@ -76,7 +76,7 @@ namespace
         {
             if (!endpoint_ || !endpoint_->valid()) return;
             const auto now = now_ms();
-            if (mode_ == CoopMode::join && !connected_ && now - last_hello_ms_ >= 500)
+            if (mode_ == CoopMode::join && !watchdog_.connected() && now - last_hello_ms_ >= 500)
             {
                 endpoint_->send(host_, port_, ccscoop::encode_wire(
                     {ccscoop::WireType::hello, 0, nonce_}));
@@ -87,11 +87,15 @@ namespace
             {
                 const auto datagram = endpoint_->receive();
                 if (!datagram) break;
+                const bool from_peer = mode_ == CoopMode::host
+                    ? datagram->address == peer_address_ && datagram->port == peer_port_
+                    : datagram->address == host_ && datagram->port == port_;
                 const auto transform = ccscoop::decode_player_transform(datagram->payload);
                 if (transform)
                 {
-                    if (transform->session == session_ && transform->sequence > remote_sequence_)
+                    if (from_peer && transform->session == session_ && transform->sequence > remote_sequence_)
                     {
+                        watchdog_.activity(now);
                         remote_sequence_ = transform->sequence;
                         remote_transform_ = *transform;
                         if (!received_transform_)
@@ -108,7 +112,7 @@ namespace
                 {
                     peer_address_ = datagram->address;
                     peer_port_ = datagram->port;
-                    connected_ = true;
+                    watchdog_.connect(now);
                     endpoint_->send(datagram->address, datagram->port, ccscoop::encode_wire(
                         {ccscoop::WireType::welcome, session_, message->nonce}));
                     RC::Output::send(STR("[CashCleanerCoop] Guest handshake accepted\n"));
@@ -117,12 +121,43 @@ namespace
                          message->nonce == nonce_)
                 {
                     session_ = message->session;
-                    if (!connected_) RC::Output::send(STR("[CashCleanerCoop] Connected to host\n"));
-                    connected_ = true;
+                    if (!watchdog_.connected()) RC::Output::send(STR("[CashCleanerCoop] Connected to host\n"));
+                    watchdog_.connect(now);
+                }
+                else if (message->type == ccscoop::WireType::heartbeat && from_peer &&
+                         message->session == session_)
+                {
+                    watchdog_.activity(now);
+                    if (mode_ == CoopMode::host)
+                    {
+                        endpoint_->send(peer_address_, peer_port_, ccscoop::encode_wire(*message));
+                    }
                 }
             }
 
-            if (connected_ && unreal_ready_ && now - last_transform_ms_ >= 100)
+            if (watchdog_.connected() && mode_ == CoopMode::join && now - last_heartbeat_ms_ >= 500)
+            {
+                endpoint_->send(host_, port_, ccscoop::encode_wire(
+                    {ccscoop::WireType::heartbeat, session_, now}));
+                last_heartbeat_ms_ = now;
+            }
+
+            if (watchdog_.expired(now))
+            {
+                watchdog_.disconnect();
+                remote_sequence_ = 0;
+                transform_sequence_ = 0;
+                remote_transform_.reset();
+                received_transform_ = false;
+                sent_transform_ = false;
+                if (ghost_actor_) ghost_actor_->K2_DestroyActor();
+                ghost_actor_ = nullptr;
+                if (mode_ == CoopMode::host) { peer_address_.clear(); peer_port_ = 0; }
+                else nonce_ = now | 1ull;
+                RC::Output::send(STR("[CashCleanerCoop] Peer timed out; waiting for reconnect\n"));
+            }
+
+            if (watchdog_.connected() && unreal_ready_ && now - last_transform_ms_ >= 100)
             {
                 auto* object = RC::Unreal::UObjectGlobals::FindFirstOf(STR("PlayerCharacter"));
                 if (object && !object->HasAnyFlags(RC::Unreal::RF_ClassDefaultObject))
@@ -241,12 +276,13 @@ namespace
         std::uint64_t nonce_{};
         std::uint64_t last_hello_ms_{};
         std::uint64_t last_transform_ms_{};
+        std::uint64_t last_heartbeat_ms_{};
         std::uint32_t transform_sequence_{};
         std::uint32_t remote_sequence_{};
         std::optional<ccscoop::PlayerTransform> remote_transform_;
         RC::Unreal::AActor* local_actor_{};
         RC::Unreal::AActor* ghost_actor_{};
-        bool connected_{};
+        ccscoop::ConnectionWatchdog watchdog_{3000};
         bool unreal_ready_{};
         bool sent_transform_{};
         bool received_transform_{};

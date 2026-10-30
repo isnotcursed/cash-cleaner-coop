@@ -110,6 +110,41 @@ void player_transform_codec_is_bounded() {
                 "unbounded transform was accepted");
 }
 
+void watchdog_times_out_and_recovers() {
+    ConnectionWatchdog watchdog(3000);
+    require_net(!watchdog.connected() && !watchdog.expired(5000), "idle watchdog expired");
+    watchdog.connect(1000);
+    require_net(watchdog.connected() && !watchdog.expired(3999), "watchdog expired early");
+    watchdog.activity(3500);
+    require_net(!watchdog.expired(6499), "activity did not renew watchdog");
+    require_net(watchdog.expired(6500), "watchdog did not expire");
+    watchdog.disconnect();
+    require_net(!watchdog.connected() && !watchdog.expired(9000), "watchdog did not disconnect");
+    watchdog.connect(10000);
+    require_net(watchdog.connected() && !watchdog.expired(10000), "watchdog did not reconnect");
+}
+
+void object_action_codec_enforces_authority_fields() {
+    const ObjectAction granted{ObjectActionKind::pickup_granted, 7, 12, 0x1122334455667788ull, 2, 4};
+    const auto encoded = encode_object_action(granted);
+    require_net(encoded.size() == 30, "object action size changed");
+    const auto decoded = decode_object_action(encoded);
+    require_net(decoded && *decoded == granted, "object action did not round-trip");
+
+    require_net(!decode_object_action(encode_object_action(
+                    {ObjectActionKind::pickup_request, 7, 12, 55, 2, 1})),
+                "pickup request with authority epoch was accepted");
+    require_net(!decode_object_action(encode_object_action(
+                    {ObjectActionKind::pickup_granted, 7, 12, 55, 2, 0})),
+                "grant without authority epoch was accepted");
+    require_net(!decode_object_action(encode_object_action(
+                    {ObjectActionKind::drop, 7, 0, 55, 2, 1})),
+                "action without request ID was accepted");
+    auto bad_kind = encoded;
+    bad_kind[5] = 99;
+    require_net(!decode_object_action(bad_kind), "unknown object action was accepted");
+}
+
 template <class Scenario>
 bool caught(const Scenario& scenario) {
     try { scenario(); return false; } catch (const std::exception&) { return true; }
@@ -123,6 +158,8 @@ int run_net_tests() {
     wire_codec_rejects_bad_packets();
     udp_loopback_round_trip();
     player_transform_codec_is_bounded();
+    watchdog_times_out_and_recovers();
+    object_action_codec_enforces_authority_fields();
     require_net(caught([] { loss_retransmit(NetFaults{true, false}); }),
                 "mutation twin no_retransmit escaped");
     require_net(caught([] { duplicates_are_deduped(NetFaults{false, true}); }),

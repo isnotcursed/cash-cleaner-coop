@@ -65,6 +65,8 @@ CashCleanerCoopProbe : 1
 - [x] Native UE4SS C++ bootstrap DLL (runtime verified)
 - [x] Binary wire codec and real UDP host/guest handshake
 - [x] Bidirectional player transforms and an opt-in collision-free ghost
+- [x] Heartbeat, timeout cleanup, and automatic guest re-handshake
+- [x] Validated pickup/grant/deny/drop wire packets with ownership epochs
 - [ ] Player avatar replication
 - [ ] Item and machine ownership
 - [ ] Quest and save-state synchronization

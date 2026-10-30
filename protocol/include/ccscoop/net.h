@@ -9,7 +9,9 @@
 
 namespace ccscoop {
 
-enum class WireType : std::uint8_t { hello = 1, welcome = 2, heartbeat = 3, player_transform = 4 };
+enum class WireType : std::uint8_t {
+    hello = 1, welcome = 2, heartbeat = 3, player_transform = 4, object_action = 5
+};
 
 struct WireMessage {
     WireType type{WireType::hello};
@@ -42,6 +44,30 @@ struct PlayerTransform {
 std::vector<std::uint8_t> encode_player_transform(const PlayerTransform& transform);
 std::optional<PlayerTransform> decode_player_transform(const std::vector<std::uint8_t>& bytes);
 
+enum class ObjectActionKind : std::uint8_t {
+    pickup_request = 1,
+    pickup_granted = 2,
+    pickup_denied = 3,
+    drop = 4,
+};
+
+struct ObjectAction {
+    ObjectActionKind kind{ObjectActionKind::pickup_request};
+    std::uint32_t session{};
+    std::uint32_t request{};
+    std::uint64_t object{};
+    std::uint32_t player{};
+    std::uint32_t epoch{};
+
+    bool operator==(const ObjectAction& other) const {
+        return kind == other.kind && session == other.session && request == other.request &&
+               object == other.object && player == other.player && epoch == other.epoch;
+    }
+};
+
+std::vector<std::uint8_t> encode_object_action(const ObjectAction& action);
+std::optional<ObjectAction> decode_object_action(const std::vector<std::uint8_t>& bytes);
+
 struct Datagram {
     std::string address;
     std::uint16_t port{};
@@ -64,6 +90,23 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+};
+
+class ConnectionWatchdog {
+public:
+    explicit ConnectionWatchdog(std::uint64_t timeout_ms = 3000) : timeout_ms_(timeout_ms) {}
+    void connect(std::uint64_t now_ms) { connected_ = true; last_activity_ms_ = now_ms; }
+    void activity(std::uint64_t now_ms) { if (connected_) last_activity_ms_ = now_ms; }
+    void disconnect() { connected_ = false; }
+    bool connected() const { return connected_; }
+    bool expired(std::uint64_t now_ms) const {
+        return connected_ && now_ms - last_activity_ms_ >= timeout_ms_;
+    }
+
+private:
+    std::uint64_t timeout_ms_;
+    std::uint64_t last_activity_ms_{};
+    bool connected_{};
 };
 
 struct Packet {
