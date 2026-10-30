@@ -87,6 +87,11 @@ local parameter_probe_functions = {
     ["Function /Script/CashCleanerSim.PickupCharacterComponent:Drop"] = true,
     ["Function /Script/CashCleanerSim.PickupCharacterComponent:Throw"] = true,
     ["Function /Script/CashCleanerSim.PickupObjectComponent:SetIsPickedUp"] = true,
+    ["Function /Script/CashCleanerSim.PickupCharacterComponent:PickUpByTrace"] = true,
+    ["Function /Script/CashCleanerSim.PickupCharacterComponent:PickUpByTraces"] = true,
+    ["Function /Script/CashCleanerSim.PickupCharacterComponent:AutoPickUp"] = true,
+    ["Function /Script/CashCleanerSim.PickupCharacterComponent:AutoGrab"] = true,
+    ["Function /Script/CashCleanerSim.PhysicsAttachCharacterComponent:AttachObject"] = true,
 }
 
 local function safe_property(object, name)
@@ -204,6 +209,11 @@ for _, target in ipairs({
     "/Script/CashCleanerSim.PickupCharacterComponent:Drop",
     "/Script/CashCleanerSim.PickupCharacterComponent:Throw",
     "/Script/CashCleanerSim.PickupObjectComponent:SetIsPickedUp",
+    "/Script/CashCleanerSim.PickupCharacterComponent:PickUpByTrace",
+    "/Script/CashCleanerSim.PickupCharacterComponent:PickUpByTraces",
+    "/Script/CashCleanerSim.PickupCharacterComponent:AutoPickUp",
+    "/Script/CashCleanerSim.PickupCharacterComponent:AutoGrab",
+    "/Script/CashCleanerSim.PhysicsAttachCharacterComponent:AttachObject",
 }) do
     local name = target
     RegisterHook(target, function(self, ...)

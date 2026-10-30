@@ -1,6 +1,8 @@
 #include <DynamicOutput/DynamicOutput.hpp>
 #include <Mod/CppUserModBase.hpp>
 #include <Unreal/AActor.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/UFunctionStructs.hpp>
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/World.hpp>
@@ -120,6 +122,13 @@ namespace
                             lease.epoch = object_action->epoch;
                             lease.holder = object_action->kind == ccscoop::ObjectActionKind::pickup_granted
                                 ? object_action->player : 0;
+                            const auto pending = pending_pickups_.find(object_action->request);
+                            if (pending != pending_pickups_.end())
+                            {
+                                if (object_action->kind == ccscoop::ObjectActionKind::pickup_denied)
+                                    rollback_pickup(pending->second);
+                                pending_pickups_.erase(pending);
+                            }
                             if (!received_object_action_)
                             {
                                 RC::Output::send(STR("[CashCleanerCoop] Object authority response received\n"));
@@ -258,7 +267,21 @@ namespace
                 {
                     static_cast<CashCleanerCoopMod*>(data)->on_local_drop(context.GetParams<DropParams>().object);
                 }, no_op, this);
-            interaction_hooks_ = {pickup, grab, drop};
+            const auto auto_pickup = RC::Unreal::UObjectGlobals::RegisterHook(
+                STR("/Script/CashCleanerSim.PickupCharacterComponent:AutoPickUp"), no_op,
+                [](RC::Unreal::UnrealScriptFunctionCallableContext& context, void* data)
+                {
+                    static_cast<CashCleanerCoopMod*>(data)->on_automatic_pickup(
+                        context.Context, STR("/Script/CashCleanerSim.PickupCharacterComponent:GetFirstPickedUpObject"));
+                }, this);
+            const auto auto_grab = RC::Unreal::UObjectGlobals::RegisterHook(
+                STR("/Script/CashCleanerSim.PickupCharacterComponent:AutoGrab"), no_op,
+                [](RC::Unreal::UnrealScriptFunctionCallableContext& context, void* data)
+                {
+                    static_cast<CashCleanerCoopMod*>(data)->on_automatic_pickup(
+                        context.Context, STR("/Script/CashCleanerSim.PickupCharacterComponent:GetCarryingLargeObject"));
+                }, this);
+            interaction_hooks_ = {pickup, grab, drop, auto_pickup, auto_grab};
             RC::Output::send(STR("[CashCleanerCoop] Pickup/drop bridge hooks registered\n"));
         }
 
@@ -267,31 +290,51 @@ namespace
             if (!objects.data || objects.count <= 0 || objects.count > 128 || objects.capacity < objects.count) return;
             for (std::int32_t index = 0; index < objects.count; ++index)
             {
-                const auto object = stable_object_id(objects.data[index]);
-                if (object == 0) continue;
-                const auto observed_at = now_ms();
-                auto& previous = local_pickup_ms_[object];
-                if (previous != 0 && observed_at - previous < 250) continue;
-                previous = observed_at;
-                if (mode_ == CoopMode::host)
-                {
-                    auto& lease = object_leases_[object];
-                    if (lease.epoch == 0) lease.epoch = 1;
-                    lease.holder = 1;
-                    ++lease.epoch;
-                }
-                else if (mode_ == CoopMode::join && watchdog_.connected())
-                {
-                    const ccscoop::ObjectAction action{ccscoop::ObjectActionKind::pickup_request,
-                        session_, ++object_request_, object, 2, 0};
-                    endpoint_->send(host_, port_, ccscoop::encode_object_action(action));
-                }
+                on_local_pickup_object(objects.data[index]);
             }
             RC::Output::send(STR("[CashCleanerCoop] Local pickup observed\n"));
         }
 
+        auto on_automatic_pickup(RC::Unreal::UObject* component, const CharType* getter_path) -> void
+        {
+            auto* function = RC::Unreal::UObjectGlobals::StaticFindObject<RC::Unreal::UFunction*>(
+                nullptr, nullptr, getter_path);
+            if (!component || !function || !function->GetReturnProperty()) return;
+            std::vector<std::uint8_t> params(function->GetParmsSize());
+            component->ProcessEvent(function, params.data());
+            auto* object = *reinterpret_cast<RC::Unreal::UObject**>(
+                params.data() + function->GetReturnProperty()->GetOffset_Internal());
+            if (object) on_local_pickup_object(object);
+        }
+
+        auto on_local_pickup_object(RC::Unreal::UObject* value) -> void
+        {
+            const auto object = stable_object_id(value);
+            if (object == 0) return;
+            const auto observed_at = now_ms();
+            auto& previous = local_pickup_ms_[object];
+            if (previous != 0 && observed_at - previous < 250) return;
+            previous = observed_at;
+            if (mode_ == CoopMode::host)
+            {
+                auto& lease = object_leases_[object];
+                if (lease.epoch == 0) lease.epoch = 1;
+                lease.holder = 1;
+                ++lease.epoch;
+            }
+            else if (mode_ == CoopMode::join && watchdog_.connected())
+            {
+                const ccscoop::ObjectAction action{ccscoop::ObjectActionKind::pickup_request,
+                    session_, ++object_request_, object, 2, 0};
+                pending_pickups_[action.request] = value;
+                endpoint_->send(host_, port_, ccscoop::encode_object_action(action));
+            }
+            RC::Output::send(STR("[CashCleanerCoop] Local pickup object observed\n"));
+        }
+
         auto on_local_drop(RC::Unreal::UObject* value) -> void
         {
+            if (suppress_local_drop_) return;
             const auto object = stable_object_id(value);
             if (object == 0) return;
             auto& lease = object_leases_[object];
@@ -307,6 +350,25 @@ namespace
                 endpoint_->send(host_, port_, ccscoop::encode_object_action(action));
             }
             RC::Output::send(STR("[CashCleanerCoop] Local drop observed\n"));
+        }
+
+        auto rollback_pickup(RC::Unreal::UObject* object) -> void
+        {
+            if (!object) return;
+            auto* component = RC::Unreal::UObjectGlobals::FindFirstOf(STR("PickupCharacterComponent"));
+            auto* function = RC::Unreal::UObjectGlobals::StaticFindObject<RC::Unreal::UFunction*>(
+                nullptr, nullptr, STR("/Script/CashCleanerSim.PickupCharacterComponent:Drop"));
+            if (!component || !function) return;
+            auto* object_property = function->FindProperty(
+                RC::Unreal::FName(STR("Object"), RC::Unreal::FNAME_Find));
+            if (!object_property) return;
+
+            std::vector<std::uint8_t> params(function->GetParmsSize());
+            *reinterpret_cast<RC::Unreal::UObject**>(params.data() + object_property->GetOffset_Internal()) = object;
+            suppress_local_drop_ = true;
+            component->ProcessEvent(function, params.data());
+            suppress_local_drop_ = false;
+            RC::Output::send(STR("[CashCleanerCoop] Denied pickup rolled back\n"));
         }
 
         auto handle_object_action(const ccscoop::ObjectAction& action) -> void
@@ -452,9 +514,11 @@ namespace
         std::unordered_map<std::uint64_t, ObjectLease> object_leases_;
         std::unordered_map<std::uint32_t, ccscoop::ObjectAction> object_responses_;
         std::unordered_map<std::uint64_t, std::uint64_t> local_pickup_ms_;
+        std::unordered_map<std::uint32_t, RC::Unreal::UObject*> pending_pickups_;
         std::vector<std::pair<int, int>> interaction_hooks_;
         std::uint32_t object_request_{};
         bool received_object_action_{};
+        bool suppress_local_drop_{};
     };
 }
 

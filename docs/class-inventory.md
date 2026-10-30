@@ -111,8 +111,15 @@ The reflected runtime signatures on the compatibility baseline are:
 - `Throw(Force: BoolProperty)`
 - `SetIsPickedUp(pickedUp: BoolProperty, grabbed: BoolProperty) -> BoolProperty`
 
-The native mod now registers read-only pre-hooks for `Pickup`, `Grab`, and `Drop`.
-It derives a provisional FNV-1a object ID from the reflected full object name,
-de-duplicates the nested `Pickup`/`Grab` pair for 250 ms, records host-local
-ownership, and sends guest pickup/drop requests through the existing authority
-protocol. It does not yet cancel a guest action or roll it back after denial.
+The native mod hooks `Pickup`, `Grab`, `Drop`, plus the actual input paths
+`AutoPickUp` and `AutoGrab`. After an automatic pickup it queries
+`GetFirstPickedUpObject` or `GetCarryingLargeObject`, derives a provisional FNV-1a
+ID from the reflected full object name, and sends the guest action through the
+authority protocol. A denial invokes `Drop` with a reflected parameter buffer;
+the resulting hook is suppressed so it cannot create an echo packet.
+
+An isolated guest connected to a deterministic denial peer rolled back all tested
+objects: `BP_MoneyPack_C` through `AutoPickUp`, and `BP_SmallBox_C` plus
+`BP_MoneyPile_C` through `AutoGrab`. The owner visually confirmed that each object
+fell out of the player's hands. Grant application and two-client convergence are
+still pending.
