@@ -81,6 +81,14 @@ local function is_relevant_function(full_name)
     return false
 end
 
+local parameter_probe_functions = {
+    ["Function /Script/CashCleanerSim.PickupCharacterComponent:Pickup"] = true,
+    ["Function /Script/CashCleanerSim.PickupCharacterComponent:Grab"] = true,
+    ["Function /Script/CashCleanerSim.PickupCharacterComponent:Drop"] = true,
+    ["Function /Script/CashCleanerSim.PickupCharacterComponent:Throw"] = true,
+    ["Function /Script/CashCleanerSim.PickupObjectComponent:SetIsPickedUp"] = true,
+}
+
 local function safe_property(object, name)
     local ok, value = pcall(function()
         return object:GetPropertyValue(name)
@@ -112,6 +120,12 @@ local function inventory_targets()
                 local full_name = fn:GetFullName()
                 if is_relevant_function(full_name) then
                     log(string.format("function flags=0x%X %s", fn:GetFunctionFlags(), full_name))
+                end
+                if parameter_probe_functions[full_name] then
+                    fn:ForEachProperty(function(property)
+                        log(string.format("parameter %s class=%s",
+                            property:GetFullName(), property:GetClass():GetFullName()))
+                    end)
                 end
             end)
         end
