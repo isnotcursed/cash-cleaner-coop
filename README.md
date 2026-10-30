@@ -19,10 +19,15 @@ CCSCOOP_PORT=24883
 CCSCOOP_MODE=join
 CCSCOOP_HOST=192.0.2.10
 CCSCOOP_PORT=24883
+
+# Optional experimental collision-free remote visual
+CCSCOOP_GHOST=1
 ```
 
 `CCSCOOP_PORT` defaults to `24883`, and guest mode defaults to `127.0.0.1`.
 Only numeric IPv4 addresses are currently accepted.
+The experimental ghost currently reuses the game's first-person skeletal mesh,
+which contains floating arms rather than a complete third-person body.
 
 ## Compatibility baseline
 
@@ -59,6 +64,7 @@ CashCleanerCoopProbe : 1
 - [x] Initial fake-world state and reliable-link model (11 scenarios, 10 twins)
 - [x] Native UE4SS C++ bootstrap DLL (runtime verified)
 - [x] Binary wire codec and real UDP host/guest handshake
+- [x] Bidirectional player transforms and an opt-in collision-free ghost
 - [ ] Player avatar replication
 - [ ] Item and machine ownership
 - [ ] Quest and save-state synchronization

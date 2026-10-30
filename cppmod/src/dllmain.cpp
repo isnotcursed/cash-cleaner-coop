@@ -2,11 +2,13 @@
 #include <Mod/CppUserModBase.hpp>
 #include <Unreal/AActor.hpp>
 #include <Unreal/UObjectGlobals.hpp>
+#include <Unreal/World.hpp>
 #include <ccscoop/net.h>
 
 #include <chrono>
 #include <cstdlib>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 namespace
@@ -40,6 +42,8 @@ namespace
             RC::Output::send(STR("[CashCleanerCoop] C++ bootstrap loaded\n"));
 
             const auto* mode = std::getenv("CCSCOOP_MODE");
+            const auto* ghost = std::getenv("CCSCOOP_GHOST");
+            ghost_enabled_ = ghost && std::string(ghost) == "1";
             if (mode && std::string(mode) == "host")
             {
                 mode_ = CoopMode::host;
@@ -89,6 +93,7 @@ namespace
                     if (transform->session == session_ && transform->sequence > remote_sequence_)
                     {
                         remote_sequence_ = transform->sequence;
+                        remote_transform_ = *transform;
                         if (!received_transform_)
                         {
                             RC::Output::send(STR("[CashCleanerCoop] Remote player transform received\n"));
@@ -123,6 +128,7 @@ namespace
                 if (object && !object->HasAnyFlags(RC::Unreal::RF_ClassDefaultObject))
                 {
                     auto* actor = static_cast<RC::Unreal::AActor*>(object);
+                    local_actor_ = actor;
                     const auto location = actor->K2_GetActorLocation();
                     const auto rotation = actor->K2_GetActorRotation();
                     const auto transform = ccscoop::PlayerTransform{
@@ -141,9 +147,90 @@ namespace
                 last_transform_ms_ = now;
             }
 
+            update_remote_ghost();
+
         }
 
       private:
+        auto update_remote_ghost() -> void
+        {
+            if (!ghost_enabled_ || !remote_transform_ || !local_actor_) return;
+            RC::Unreal::FVector location{};
+            location.SetX(remote_transform_->x);
+            location.SetY(remote_transform_->y);
+            location.SetZ(remote_transform_->z);
+            RC::Unreal::FRotator rotation{0.0, remote_transform_->yaw, 0.0};
+
+            if (!ghost_actor_)
+            {
+                try
+                {
+                    ghost_stage_ = 1;
+                    auto* ghost_class = RC::Unreal::UObjectGlobals::StaticFindObject<RC::Unreal::UClass*>(
+                        nullptr, nullptr, STR("/Script/Engine.SkeletalMeshActor"));
+                    auto* world = local_actor_->GetWorld();
+                    if (!ghost_class || !world) return;
+                    ghost_stage_ = 2;
+                    ghost_actor_ = world->SpawnActor(ghost_class, &location, &rotation);
+                    if (!ghost_actor_) return;
+                    ghost_actor_->SetActorEnableCollision(false);
+                    ghost_actor_->SetActorTickEnabled(false);
+
+                    ghost_stage_ = 3;
+                    auto* component_class = RC::Unreal::UObjectGlobals::StaticFindObject<RC::Unreal::UClass*>(
+                        nullptr, nullptr, STR("/Script/Engine.SkeletalMeshComponent"));
+                    auto** target_component = ghost_actor_->GetValuePtrByPropertyNameInChain<RC::Unreal::UObject*>(STR("SkeletalMeshComponent"));
+                    if (!component_class || !target_component || !*target_component)
+                        throw std::runtime_error("mesh component unavailable");
+
+                    ghost_stage_ = 4;
+                    RC::Unreal::UObject* mesh_asset = nullptr;
+                    for (auto* component : local_actor_->GetComponentsByClass(component_class))
+                    {
+                        RC::Unreal::UObject** mesh = nullptr;
+                        if (component->GetPropertyByNameInChain(STR("SkeletalMeshAsset")))
+                            mesh = component->GetValuePtrByPropertyNameInChain<RC::Unreal::UObject*>(STR("SkeletalMeshAsset"));
+                        else if (component->GetPropertyByNameInChain(STR("SkeletalMesh")))
+                            mesh = component->GetValuePtrByPropertyNameInChain<RC::Unreal::UObject*>(STR("SkeletalMesh"));
+                        if (mesh && *mesh) { mesh_asset = *mesh; break; }
+                    }
+                    if (!mesh_asset) throw std::runtime_error("skeletal mesh unavailable");
+
+                    ghost_stage_ = 5;
+                    auto* function = RC::Unreal::UObjectGlobals::StaticFindObject<RC::Unreal::UFunction*>(
+                        nullptr, nullptr, STR("/Script/Engine.SkeletalMeshComponent:SetSkeletalMeshAsset"));
+                    if (!function)
+                        function = RC::Unreal::UObjectGlobals::StaticFindObject<RC::Unreal::UFunction*>(
+                            nullptr, nullptr, STR("/Script/Engine.SkinnedMeshComponent:SetSkeletalMesh"));
+                    if (!function) throw std::runtime_error("mesh setter unavailable");
+                    struct SetMeshParams { RC::Unreal::UObject* NewMesh; } params{mesh_asset};
+                    (*target_component)->ProcessEvent(function, &params);
+                    ghost_stage_ = 6;
+                    RC::Output::send(STR("[CashCleanerCoop] Remote ghost spawned\n"));
+                }
+                catch (...)
+                {
+                    if (ghost_actor_) ghost_actor_->K2_DestroyActor();
+                    ghost_actor_ = nullptr;
+                    if (!ghost_error_logged_)
+                    {
+                        RC::Output::send(STR("[CashCleanerCoop] ERROR: remote ghost setup failed\n"));
+                        if (ghost_stage_ == 1) RC::Output::send(STR("[CashCleanerCoop] Ghost failure stage 1: class/world\n"));
+                        else if (ghost_stage_ == 2) RC::Output::send(STR("[CashCleanerCoop] Ghost failure stage 2: spawn\n"));
+                        else if (ghost_stage_ == 3) RC::Output::send(STR("[CashCleanerCoop] Ghost failure stage 3: target component\n"));
+                        else if (ghost_stage_ == 4) RC::Output::send(STR("[CashCleanerCoop] Ghost failure stage 4: source mesh\n"));
+                        else if (ghost_stage_ == 5) RC::Output::send(STR("[CashCleanerCoop] Ghost failure stage 5: mesh setter\n"));
+                        ghost_error_logged_ = true;
+                    }
+                }
+            }
+            else
+            {
+                RC::Unreal::FHitResult hit{};
+                ghost_actor_->K2_SetActorLocationAndRotation(location, rotation, false, hit, true);
+            }
+        }
+
         CoopMode mode_{CoopMode::passive};
         std::unique_ptr<ccscoop::UdpEndpoint> endpoint_;
         std::string host_{"127.0.0.1"};
@@ -156,10 +243,16 @@ namespace
         std::uint64_t last_transform_ms_{};
         std::uint32_t transform_sequence_{};
         std::uint32_t remote_sequence_{};
+        std::optional<ccscoop::PlayerTransform> remote_transform_;
+        RC::Unreal::AActor* local_actor_{};
+        RC::Unreal::AActor* ghost_actor_{};
         bool connected_{};
         bool unreal_ready_{};
         bool sent_transform_{};
         bool received_transform_{};
+        bool ghost_enabled_{};
+        bool ghost_error_logged_{};
+        int ghost_stage_{};
     };
 }
 

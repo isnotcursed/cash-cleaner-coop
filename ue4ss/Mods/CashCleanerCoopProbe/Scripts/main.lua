@@ -117,6 +117,31 @@ local function inventory_targets()
     log("target inventory end")
 end
 
+local function inventory_live_player()
+    local player = FindFirstOf("PlayerCharacter")
+    if not player:IsValid() then
+        log("live player unavailable")
+        return
+    end
+    log("live player object " .. player:GetFullName())
+    log("live player class " .. player:GetClass():GetFullName())
+    for _, name in ipairs({
+        "Mesh", "CharacterMesh", "FirstPersonMesh", "BodyMesh",
+        "Camera", "FirstPersonCamera", "CameraComponent",
+    }) do
+        local ok, full_name = pcall(function()
+            local value = player:GetPropertyValue(name)
+            if not value or not value:IsValid() then
+                return nil
+            end
+            return value:GetFullName()
+        end)
+        if ok and full_name then
+            log(string.format("live player property %s=%s", name, full_name))
+        end
+    end
+end
+
 local function schedule_inventory()
     if scan_scheduled then
         return
@@ -127,6 +152,7 @@ local function schedule_inventory()
         ExecuteInGameThread(function()
             inventory_classes()
             inventory_targets()
+            inventory_live_player()
             scan_scheduled = false
         end)
     end)
