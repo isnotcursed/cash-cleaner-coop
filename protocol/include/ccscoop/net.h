@@ -5,12 +5,14 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace ccscoop {
 
 enum class WireType : std::uint8_t {
-    hello = 1, welcome = 2, heartbeat = 3, player_transform = 4, object_action = 5
+    hello = 1, welcome = 2, heartbeat = 3, player_transform = 4, object_action = 5,
+    object_transform = 6
 };
 
 struct WireMessage {
@@ -67,6 +69,42 @@ struct ObjectAction {
 
 std::vector<std::uint8_t> encode_object_action(const ObjectAction& action);
 std::optional<ObjectAction> decode_object_action(const std::vector<std::uint8_t>& bytes);
+
+struct ObjectTransform {
+    std::uint32_t session{};
+    std::uint64_t object{};
+    std::uint32_t player{};
+    std::uint32_t epoch{};
+    std::uint32_t sequence{};
+    float x{};
+    float y{};
+    float z{};
+    float qx{};
+    float qy{};
+    float qz{};
+    float qw{1.0f};
+    float vx{};
+    float vy{};
+    float vz{};
+    float wx{};
+    float wy{};
+    float wz{};
+
+    bool operator==(const ObjectTransform& other) const = default;
+};
+
+std::vector<std::uint8_t> encode_object_transform(const ObjectTransform& transform);
+std::optional<ObjectTransform> decode_object_transform(const std::vector<std::uint8_t>& bytes);
+
+class ObjectTransformOrder {
+public:
+    bool should_apply(const ObjectTransform& transform);
+    void clear();
+
+private:
+    struct Cursor { std::uint32_t epoch{}; std::uint32_t sequence{}; };
+    std::unordered_map<std::uint64_t, Cursor> cursors_;
+};
 
 struct Datagram {
     std::string address;

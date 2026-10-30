@@ -92,6 +92,7 @@ local parameter_probe_functions = {
     ["Function /Script/CashCleanerSim.PickupCharacterComponent:AutoPickUp"] = true,
     ["Function /Script/CashCleanerSim.PickupCharacterComponent:AutoGrab"] = true,
     ["Function /Script/CashCleanerSim.PhysicsAttachCharacterComponent:AttachObject"] = true,
+    ["Function /Script/CashCleanerSim.InteractiveObject:SetSimulatePhysics"] = true,
 }
 
 local function safe_property(object, name)

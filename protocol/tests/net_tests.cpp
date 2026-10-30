@@ -145,6 +145,39 @@ void object_action_codec_enforces_authority_fields() {
     require_net(!decode_object_action(bad_kind), "unknown object action was accepted");
 }
 
+void object_transform_codec_is_bounded() {
+    const ObjectTransform expected{7, 55, 1, 4, 9, 1.0f, 2.0f, 3.0f,
+                                   0.0f, 0.0f, 0.0f, 1.0f,
+                                   4.0f, 5.0f, 6.0f, 0.1f, 0.2f, 0.3f};
+    const auto encoded = encode_object_transform(expected);
+    require_net(encoded.size() == 81, "object transform size changed");
+    const auto decoded = decode_object_transform(encoded);
+    require_net(decoded && *decoded == expected, "object transform did not round-trip");
+    require_net(!decode_object_transform(encode_object_transform(
+                    {7, 55, 1, 4, 9, std::numeric_limits<float>::quiet_NaN(), 2, 3,
+                     0, 0, 0, 1, 0, 0, 0, 0, 0, 0})),
+                "NaN object transform was accepted");
+    require_net(!decode_object_transform(encode_object_transform(
+                    {7, 55, 1, 4, 9, 1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})),
+                "zero quaternion was accepted");
+}
+
+void object_transform_order_rejects_rollback() {
+    ObjectTransformOrder order;
+    ObjectTransform state{7, 55, 1, 4, 10, 1, 2, 3, 0, 0, 0, 1};
+    require_net(order.should_apply(state), "first transform was rejected");
+    state.sequence = 9;
+    require_net(!order.should_apply(state), "older sequence was accepted");
+    state.epoch = 3;
+    state.sequence = 100;
+    require_net(!order.should_apply(state), "older epoch was accepted");
+    state.epoch = 5;
+    state.sequence = 1;
+    require_net(order.should_apply(state), "new ownership epoch was rejected");
+    order.clear();
+    require_net(order.should_apply(state), "clear did not reset transform order");
+}
+
 template <class Scenario>
 bool caught(const Scenario& scenario) {
     try { scenario(); return false; } catch (const std::exception&) { return true; }
@@ -160,6 +193,8 @@ int run_net_tests() {
     player_transform_codec_is_bounded();
     watchdog_times_out_and_recovers();
     object_action_codec_enforces_authority_fields();
+    object_transform_codec_is_bounded();
+    object_transform_order_rejects_rollback();
     require_net(caught([] { loss_retransmit(NetFaults{true, false}); }),
                 "mutation twin no_retransmit escaped");
     require_net(caught([] { duplicates_are_deduped(NetFaults{false, true}); }),

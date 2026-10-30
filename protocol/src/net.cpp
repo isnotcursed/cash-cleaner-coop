@@ -24,6 +24,7 @@ constexpr std::array<std::uint8_t, 4> kMagic{{'C', 'C', 'S', 1}};
 constexpr std::size_t kWireSize = 17;
 constexpr std::size_t kTransformSize = 33;
 constexpr std::size_t kObjectActionSize = 30;
+constexpr std::size_t kObjectTransformSize = 81;
 constexpr float kMaxCoordinate = 100000000.0f;
 
 void write_u32(std::vector<std::uint8_t>& out, std::uint32_t value) {
@@ -131,6 +132,67 @@ std::optional<ObjectAction> decode_object_action(const std::vector<std::uint8_t>
     if (result.kind == ObjectActionKind::pickup_request && result.epoch != 0) return std::nullopt;
     if (result.kind != ObjectActionKind::pickup_request && result.epoch == 0) return std::nullopt;
     return result;
+}
+
+std::vector<std::uint8_t> encode_object_transform(const ObjectTransform& transform) {
+    std::vector<std::uint8_t> out(kMagic.begin(), kMagic.end());
+    out.push_back(static_cast<std::uint8_t>(WireType::object_transform));
+    write_u32(out, transform.session);
+    write_u64(out, transform.object);
+    write_u32(out, transform.player);
+    write_u32(out, transform.epoch);
+    write_u32(out, transform.sequence);
+    write_float(out, transform.x);
+    write_float(out, transform.y);
+    write_float(out, transform.z);
+    write_float(out, transform.qx);
+    write_float(out, transform.qy);
+    write_float(out, transform.qz);
+    write_float(out, transform.qw);
+    write_float(out, transform.vx);
+    write_float(out, transform.vy);
+    write_float(out, transform.vz);
+    write_float(out, transform.wx);
+    write_float(out, transform.wy);
+    write_float(out, transform.wz);
+    return out;
+}
+
+std::optional<ObjectTransform> decode_object_transform(const std::vector<std::uint8_t>& bytes) {
+    if (bytes.size() != kObjectTransformSize || !std::equal(kMagic.begin(), kMagic.end(), bytes.begin()) ||
+        bytes[4] != static_cast<std::uint8_t>(WireType::object_transform)) return std::nullopt;
+    ObjectTransform result{read_u32(bytes.data() + 5), read_u64(bytes.data() + 9),
+                           read_u32(bytes.data() + 17), read_u32(bytes.data() + 21),
+                           read_u32(bytes.data() + 25), read_float(bytes.data() + 29),
+                           read_float(bytes.data() + 33), read_float(bytes.data() + 37),
+                           read_float(bytes.data() + 41), read_float(bytes.data() + 45),
+                           read_float(bytes.data() + 49), read_float(bytes.data() + 53),
+                           read_float(bytes.data() + 57), read_float(bytes.data() + 61),
+                           read_float(bytes.data() + 65), read_float(bytes.data() + 69),
+                           read_float(bytes.data() + 73), read_float(bytes.data() + 77)};
+    const float quaternion_norm = result.qx * result.qx + result.qy * result.qy +
+                                  result.qz * result.qz + result.qw * result.qw;
+    if (result.session == 0 || result.object == 0 || result.player == 0 || result.epoch == 0 ||
+        result.sequence == 0 ||
+        !std::isfinite(result.x) || !std::isfinite(result.y) || !std::isfinite(result.z) ||
+        !std::isfinite(quaternion_norm) || quaternion_norm < 0.99f || quaternion_norm > 1.01f ||
+        !std::isfinite(result.vx) || !std::isfinite(result.vy) || !std::isfinite(result.vz) ||
+        !std::isfinite(result.wx) || !std::isfinite(result.wy) || !std::isfinite(result.wz) ||
+        std::fabs(result.x) > kMaxCoordinate || std::fabs(result.y) > kMaxCoordinate ||
+        std::fabs(result.z) > kMaxCoordinate) return std::nullopt;
+    return result;
+}
+
+bool ObjectTransformOrder::should_apply(const ObjectTransform& transform) {
+    auto& cursor = cursors_[transform.object];
+    if (transform.epoch < cursor.epoch ||
+        (transform.epoch == cursor.epoch && transform.sequence <= cursor.sequence)) return false;
+    cursor = {transform.epoch, transform.sequence};
+    return true;
+}
+
+void ObjectTransformOrder::clear() {
+    cursors_.clear();
 }
 
 struct UdpEndpoint::Impl {

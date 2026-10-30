@@ -113,8 +113,9 @@ The reflected runtime signatures on the compatibility baseline are:
 
 The native mod hooks `Pickup`, `Grab`, `Drop`, `Throw`, plus the actual input paths
 `AutoPickUp` and `AutoGrab`. After an automatic pickup it queries
-`GetFirstPickedUpObject` or `GetCarryingLargeObject`, derives a provisional FNV-1a
-ID from the reflected full object name, and sends the guest action through the
+`GetFirstPickedUpObject` or `GetCarryingLargeObject`, derives an FNV-1a ID from the
+reflected class and persistent `UniqueID` GUID (falling back to the full name only
+when the GUID is unavailable), and sends the guest action through the
 authority protocol. A denial invokes `Drop` with a reflected parameter buffer;
 the resulting hook is suppressed so it cannot create an echo packet.
 
@@ -128,3 +129,18 @@ third grant at epoch `6`. The owner visually confirmed take, throw, retake, plac
 and retake. `Throw` requires its own hook, while `Drop` can receive an internal
 object instead of the held actor; both hooks therefore query the component for the
 actual held object before releasing its lease.
+
+Two isolated clients proved that reflected runtime object names are not stable:
+the same pack used suffixes `_2147469628` and `_2147469637`. Its inherited
+`UniqueID` GUID and `Seed` were identical on both clients, so network IDs now hash
+the class plus `UniqueID`. Host pickup then hid the matching guest actor, and both
+pickup directions shared ownership correctly.
+
+The first drop prototype (one transform followed by local physics) produced large
+position and rotation divergence. Repeating Euler transforms for five seconds was
+also insufficient for carefully stacked small objects. The replacement protocol
+uses monotonic sequence numbers, ownership epochs, quaternion rotation, and fields
+for linear/angular velocity. Host world streaming now inventories `InteractiveObject`
+actors by `UniqueID`, skips held objects, and sends changed kinematic poses under a
+bounded per-tick budget. This path builds and passes codec/order tests but has not
+yet met an in-game numeric convergence threshold.

@@ -4,11 +4,14 @@
 #include <Unreal/CoreUObject/UObject/Class.hpp>
 #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
 #include <Unreal/UFunctionStructs.hpp>
+#include <Unreal/UnrealCoreStructs.hpp>
 #include <Unreal/UObjectGlobals.hpp>
 #include <Unreal/World.hpp>
 #include <ccscoop/net.h>
 
 #include <chrono>
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
@@ -37,12 +40,31 @@ namespace
     auto stable_object_id(RC::Unreal::UObject* object) -> std::uint64_t
     {
         if (!object) return 0;
-        const auto name = object->GetFullName();
         std::uint64_t hash = 14695981039346656037ull;
-        for (const auto character : name)
+        const auto hash_text = [&hash](const auto& text)
         {
-            hash ^= static_cast<std::uint64_t>(character);
-            hash *= 1099511628211ull;
+            for (const auto character : text)
+            {
+                hash ^= static_cast<std::uint64_t>(character);
+                hash *= 1099511628211ull;
+            }
+        };
+        if (auto* unique_id = object->GetValuePtrByPropertyNameInChain<RC::Unreal::FGuid>(STR("UniqueID"));
+            unique_id && (unique_id->A || unique_id->B || unique_id->C || unique_id->D))
+        {
+            hash_text(object->GetClassPrivate()->GetFullName());
+            for (const auto part : {unique_id->A, unique_id->B, unique_id->C, unique_id->D})
+            {
+                for (int shift = 0; shift < 32; shift += 8)
+                {
+                    hash ^= static_cast<std::uint8_t>(part >> shift);
+                    hash *= 1099511628211ull;
+                }
+            }
+        }
+        else
+        {
+            hash_text(object->GetFullName());
         }
         return hash == 0 ? 1 : hash;
     }
@@ -123,7 +145,7 @@ namespace
                             lease.holder = object_action->kind == ccscoop::ObjectActionKind::pickup_granted
                                 ? object_action->player : 0;
                             const auto pending = pending_pickups_.find(object_action->request);
-                            if (pending != pending_pickups_.end())
+                            if (object_action->player == 2 && pending != pending_pickups_.end())
                             {
                                 if (object_action->kind == ccscoop::ObjectActionKind::pickup_denied)
                                     rollback_pickup(pending->second);
@@ -131,6 +153,9 @@ namespace
                                     RC::Output::send(STR("[CashCleanerCoop] Local pickup granted by host\n"));
                                 pending_pickups_.erase(pending);
                             }
+                            if (object_action->player == 1)
+                                apply_remote_object_state(object_action->object,
+                                    object_action->kind == ccscoop::ObjectActionKind::pickup_granted);
                             if (object_action->kind == ccscoop::ObjectActionKind::drop)
                                 RC::Output::send(STR("[CashCleanerCoop] Local drop accepted by host\n"));
                             if (!received_object_action_)
@@ -155,6 +180,16 @@ namespace
                             RC::Output::send(STR("[CashCleanerCoop] Remote player transform received\n"));
                             received_transform_ = true;
                         }
+                    }
+                    continue;
+                }
+                const auto object_transform = ccscoop::decode_object_transform(datagram->payload);
+                if (object_transform)
+                {
+                    if (from_peer && object_transform->session == session_)
+                    {
+                        watchdog_.activity(now);
+                        apply_remote_object_transform(*object_transform);
                     }
                     continue;
                 }
@@ -200,6 +235,8 @@ namespace
                 remote_sequence_ = 0;
                 transform_sequence_ = 0;
                 remote_transform_.reset();
+                object_transform_order_.clear();
+                local_object_cache_.clear();
                 received_transform_ = false;
                 sent_transform_ = false;
                 if (ghost_actor_) ghost_actor_->K2_DestroyActor();
@@ -235,6 +272,9 @@ namespace
             }
 
             update_remote_ghost();
+            flush_pending_object_transforms(now);
+            restore_remote_object_collisions(now);
+            stream_host_world(now);
 
         }
 
@@ -269,15 +309,21 @@ namespace
                 STR("/Script/CashCleanerSim.PickupCharacterComponent:Drop"),
                 [](RC::Unreal::UnrealScriptFunctionCallableContext& context, void* data)
                 {
-                    static_cast<CashCleanerCoopMod*>(data)->on_drop_input(
+                    static_cast<CashCleanerCoopMod*>(data)->prepare_local_drop(
                         context.Context, context.GetParams<DropParams>().object);
-                }, no_op, this);
+                }, [](RC::Unreal::UnrealScriptFunctionCallableContext&, void* data)
+                {
+                    static_cast<CashCleanerCoopMod*>(data)->finish_local_drop();
+                }, this);
             const auto throw_object = RC::Unreal::UObjectGlobals::RegisterHook(
                 STR("/Script/CashCleanerSim.PickupCharacterComponent:Throw"),
                 [](RC::Unreal::UnrealScriptFunctionCallableContext& context, void* data)
                 {
-                    static_cast<CashCleanerCoopMod*>(data)->on_drop_input(context.Context, nullptr);
-                }, no_op, this);
+                    static_cast<CashCleanerCoopMod*>(data)->prepare_local_drop(context.Context, nullptr);
+                }, [](RC::Unreal::UnrealScriptFunctionCallableContext&, void* data)
+                {
+                    static_cast<CashCleanerCoopMod*>(data)->finish_local_drop();
+                }, this);
             const auto auto_pickup = RC::Unreal::UObjectGlobals::RegisterHook(
                 STR("/Script/CashCleanerSim.PickupCharacterComponent:AutoPickUp"), no_op,
                 [](RC::Unreal::UnrealScriptFunctionCallableContext& context, void* data)
@@ -324,7 +370,7 @@ namespace
                 params.data() + function->GetReturnProperty()->GetOffset_Internal());
         }
 
-        auto on_drop_input(RC::Unreal::UObject* component, RC::Unreal::UObject* fallback) -> void
+        auto prepare_local_drop(RC::Unreal::UObject* component, RC::Unreal::UObject* fallback) -> void
         {
             if (suppress_local_drop_) return;
             auto* object = get_held_object(
@@ -332,13 +378,32 @@ namespace
             if (!object)
                 object = get_held_object(
                     component, STR("/Script/CashCleanerSim.PickupCharacterComponent:GetFirstPickedUpObject"));
-            on_local_drop(object ? object : fallback);
+            pending_local_drop_ = object ? object : fallback;
+        }
+
+        auto finish_local_drop() -> void
+        {
+            if (suppress_local_drop_ || !pending_local_drop_) return;
+            auto* object = pending_local_drop_;
+            pending_local_drop_ = nullptr;
+            on_local_drop(object);
         }
 
         auto on_local_pickup_object(RC::Unreal::UObject* value) -> void
         {
             const auto object = stable_object_id(value);
             if (object == 0) return;
+            if (std::getenv("CCSCOOP_TRACE_OBJECTS"))
+            {
+                RC::Output::send(STR("[CashCleanerCoop] Pickup identity "));
+                RC::Output::send(value->GetFullName());
+                RC::Output::send(STR("\n"));
+                if (auto* unique_id = value->GetValuePtrByPropertyNameInChain<RC::Unreal::FGuid>(STR("UniqueID")))
+                {
+                    RC::Output::send(STR("[CashCleanerCoop] Pickup UniqueID {} {} {} {}\n"),
+                        unique_id->A, unique_id->B, unique_id->C, unique_id->D);
+                }
+            }
             const auto observed_at = now_ms();
             auto& previous = local_pickup_ms_[object];
             if (previous != 0 && observed_at - previous < 250) return;
@@ -349,6 +414,12 @@ namespace
                 if (lease.epoch == 0) lease.epoch = 1;
                 lease.holder = 1;
                 ++lease.epoch;
+                if (watchdog_.connected())
+                {
+                    const ccscoop::ObjectAction action{ccscoop::ObjectActionKind::pickup_granted,
+                        session_, ++object_request_, object, 1, lease.epoch};
+                    endpoint_->send(peer_address_, peer_port_, ccscoop::encode_object_action(action));
+                }
             }
             else if (mode_ == CoopMode::join && watchdog_.connected())
             {
@@ -370,12 +441,20 @@ namespace
             {
                 lease.holder = 0;
                 ++lease.epoch;
+                if (watchdog_.connected())
+                {
+                    const ccscoop::ObjectAction action{ccscoop::ObjectActionKind::drop,
+                        session_, ++object_request_, object, 1, lease.epoch};
+                    endpoint_->send(peer_address_, peer_port_, ccscoop::encode_object_action(action));
+                    queue_object_transform(value, object, 1, lease.epoch);
+                }
             }
             else if (mode_ == CoopMode::join && watchdog_.connected() && lease.holder == 2 && lease.epoch != 0)
             {
                 const ccscoop::ObjectAction action{ccscoop::ObjectActionKind::drop,
                     session_, ++object_request_, object, 2, lease.epoch};
                 endpoint_->send(host_, port_, ccscoop::encode_object_action(action));
+                queue_object_transform(value, object, 2, lease.epoch);
             }
             RC::Output::send(STR("[CashCleanerCoop] Local drop observed\n"));
         }
@@ -429,11 +508,185 @@ namespace
             }
             object_responses_.emplace(action.request, response);
             endpoint_->send(peer_address_, peer_port_, ccscoop::encode_object_action(response));
+            if (response.kind == ccscoop::ObjectActionKind::pickup_granted)
+                apply_remote_object_state(action.object, true);
+            else if (response.kind == ccscoop::ObjectActionKind::drop)
+                apply_remote_object_state(action.object, false);
             RC::Output::send(response.kind == ccscoop::ObjectActionKind::pickup_granted
                 ? STR("[CashCleanerCoop] Object pickup granted\n")
                 : response.kind == ccscoop::ObjectActionKind::drop
                     ? STR("[CashCleanerCoop] Object drop accepted\n")
                     : STR("[CashCleanerCoop] Object action denied\n"));
+        }
+
+        auto apply_remote_object_state(std::uint64_t object_id, bool hidden) -> void
+        {
+            auto* match = find_local_object(object_id);
+            if (!match)
+            {
+                RC::Output::send(STR("[CashCleanerCoop] Remote object not found locally\n"));
+                return;
+            }
+            match->SetActorHiddenInGame(hidden);
+            match->SetActorEnableCollision(!hidden);
+            RC::Output::send(hidden
+                ? STR("[CashCleanerCoop] Remote-held object hidden\n")
+                : STR("[CashCleanerCoop] Remote-held object restored\n"));
+        }
+
+        auto find_local_object(std::uint64_t object_id) -> RC::Unreal::AActor*
+        {
+            const auto cached = local_object_cache_.find(object_id);
+            if (cached != local_object_cache_.end()) return cached->second;
+            RC::Unreal::AActor* match = nullptr;
+            RC::Unreal::UObjectGlobals::ForEachUObject(
+                [&](RC::Unreal::UObject* object, std::int32_t, std::int32_t)
+                {
+                    if (!object || object->HasAnyFlags(RC::Unreal::RF_ClassDefaultObject) ||
+                        !object->IsA(RC::Unreal::AActor::StaticClass()))
+                        return RC::LoopAction::Continue;
+                    if (stable_object_id(object) != object_id)
+                        return RC::LoopAction::Continue;
+                    match = static_cast<RC::Unreal::AActor*>(object);
+                    local_object_cache_[object_id] = match;
+                    return RC::LoopAction::Break;
+                });
+            return match;
+        }
+
+        auto apply_remote_object_transform(const ccscoop::ObjectTransform& transform) -> void
+        {
+            if (!object_transform_order_.should_apply(transform)) return;
+            auto* actor = find_local_object(transform.object);
+            if (!actor) return;
+            RC::Unreal::FVector location{};
+            location.SetX(transform.x);
+            location.SetY(transform.y);
+            location.SetZ(transform.z);
+            constexpr double radians_to_degrees = 57.29577951308232;
+            const double sin_pitch = std::clamp(
+                2.0 * (transform.qw * transform.qy - transform.qz * transform.qx), -1.0, 1.0);
+            const double pitch = std::asin(sin_pitch) * radians_to_degrees;
+            const double yaw = std::atan2(
+                2.0 * (transform.qw * transform.qz + transform.qx * transform.qy),
+                1.0 - 2.0 * (transform.qy * transform.qy + transform.qz * transform.qz)) * radians_to_degrees;
+            const double roll = std::atan2(
+                2.0 * (transform.qw * transform.qx + transform.qy * transform.qz),
+                1.0 - 2.0 * (transform.qx * transform.qx + transform.qy * transform.qy)) * radians_to_degrees;
+            RC::Unreal::FRotator rotation{pitch, yaw, roll};
+            RC::Unreal::FHitResult hit{};
+            actor->SetActorHiddenInGame(false);
+            actor->SetActorEnableCollision(false);
+            set_object_physics(actor, false);
+            actor->K2_SetActorLocationAndRotation(location, rotation, false, hit, true);
+            remote_transform_activity_[transform.object] = {actor, now_ms()};
+        }
+
+        auto stream_host_world(std::uint64_t now) -> void
+        {
+            if (mode_ != CoopMode::host || !watchdog_.connected() || now - last_world_stream_ms_ < 100)
+                return;
+            last_world_stream_ms_ = now;
+            auto* interactive_class = RC::Unreal::UObjectGlobals::StaticFindObject<RC::Unreal::UClass*>(
+                nullptr, nullptr, STR("/Script/CashCleanerSim.InteractiveObject"));
+            if (!interactive_class) return;
+            std::uint32_t sent = 0;
+            RC::Unreal::UObjectGlobals::ForEachUObject(
+                [&](RC::Unreal::UObject* object, std::int32_t, std::int32_t)
+                {
+                    if (sent >= 32) return RC::LoopAction::Break;
+                    if (!object || object->HasAnyFlags(RC::Unreal::RF_ClassDefaultObject) ||
+                        !object->IsA(interactive_class) || !object->IsA(RC::Unreal::AActor::StaticClass()))
+                        return RC::LoopAction::Continue;
+                    auto* unique_id = object->GetValuePtrByPropertyNameInChain<RC::Unreal::FGuid>(STR("UniqueID"));
+                    if (!unique_id || !(unique_id->A || unique_id->B || unique_id->C || unique_id->D))
+                        return RC::LoopAction::Continue;
+                    const auto id = stable_object_id(object);
+                    const auto lease = object_leases_.find(id);
+                    if (lease != object_leases_.end() && lease->second.holder != 0)
+                        return RC::LoopAction::Continue;
+                    auto* actor = static_cast<RC::Unreal::AActor*>(object);
+                    const auto location = actor->K2_GetActorLocation();
+                    auto actor_transform = actor->GetTransform();
+                    const auto& rotation = actor_transform.GetRotation();
+                    WorldPose pose{static_cast<float>(location.X()), static_cast<float>(location.Y()),
+                        static_cast<float>(location.Z()), static_cast<float>(rotation.GetX()),
+                        static_cast<float>(rotation.GetY()), static_cast<float>(rotation.GetZ()),
+                        static_cast<float>(rotation.GetW())};
+                    const auto previous = last_world_poses_.find(id);
+                    const auto last_sent = last_world_pose_sent_ms_.find(id);
+                    if (previous != last_world_poses_.end() && pose.nearly_equals(previous->second) &&
+                        last_sent != last_world_pose_sent_ms_.end() && now - last_sent->second < 2000)
+                        return RC::LoopAction::Continue;
+                    last_world_poses_[id] = pose;
+                    last_world_pose_sent_ms_[id] = now;
+                    auto& authority = object_leases_[id];
+                    if (authority.epoch == 0) authority.epoch = 1;
+                    const ccscoop::ObjectTransform packet{session_, id, 1, authority.epoch,
+                        ++object_transform_sequence_, pose.x, pose.y, pose.z,
+                        pose.qx, pose.qy, pose.qz, pose.qw,
+                        0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+                    endpoint_->send(peer_address_, peer_port_, ccscoop::encode_object_transform(packet));
+                    ++sent;
+                    return RC::LoopAction::Continue;
+                });
+        }
+
+        auto queue_object_transform(RC::Unreal::UObject* value, std::uint64_t object,
+                                    std::uint32_t player, std::uint32_t epoch) -> void
+        {
+            if (!value || !value->IsA(RC::Unreal::AActor::StaticClass())) return;
+            const auto now = now_ms();
+            pending_object_transforms_.push_back(
+                {static_cast<RC::Unreal::AActor*>(value), object, player, epoch, now + 50, now + 5000});
+        }
+
+        auto flush_pending_object_transforms(std::uint64_t now) -> void
+        {
+            for (auto it = pending_object_transforms_.begin(); it != pending_object_transforms_.end();)
+            {
+                if (now < it->send_at) { ++it; continue; }
+                const auto location = it->actor->K2_GetActorLocation();
+                auto actor_transform = it->actor->GetTransform();
+                const auto& rotation = actor_transform.GetRotation();
+                const ccscoop::ObjectTransform transform{session_, it->object, it->player, it->epoch,
+                    ++object_transform_sequence_,
+                    static_cast<float>(location.X()), static_cast<float>(location.Y()),
+                    static_cast<float>(location.Z()), static_cast<float>(rotation.GetX()),
+                    static_cast<float>(rotation.GetY()), static_cast<float>(rotation.GetZ()),
+                    static_cast<float>(rotation.GetW()), 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+                const auto& address = mode_ == CoopMode::host ? peer_address_ : host_;
+                const auto port = mode_ == CoopMode::host ? peer_port_ : port_;
+                endpoint_->send(address, port, ccscoop::encode_object_transform(transform));
+                if (now >= it->send_until)
+                    it = pending_object_transforms_.erase(it);
+                else
+                {
+                    it->send_at = now + 50;
+                    ++it;
+                }
+            }
+        }
+
+        auto restore_remote_object_collisions(std::uint64_t now) -> void
+        {
+            for (auto it = remote_transform_activity_.begin(); it != remote_transform_activity_.end();)
+            {
+                if (now - it->second.last_update < 250) { ++it; continue; }
+                it->second.actor->SetActorEnableCollision(true);
+                RC::Output::send(STR("[CashCleanerCoop] Remote object trajectory settled\n"));
+                it = remote_transform_activity_.erase(it);
+            }
+        }
+
+        auto set_object_physics(RC::Unreal::AActor* actor, bool enabled) -> void
+        {
+            if (!actor) return;
+            auto* function = RC::Unreal::UObjectGlobals::StaticFindObject<RC::Unreal::UFunction*>(
+                nullptr, nullptr, STR("/Script/CashCleanerSim.InteractiveObject:SetSimulatePhysics"));
+            if (!function) return;
+            struct SetSimulatePhysicsParams { bool simulate; } params{enabled};
+            actor->ProcessEvent(function, &params);
         }
 
         auto update_remote_ghost() -> void
@@ -547,6 +800,37 @@ namespace
         std::uint32_t object_request_{};
         bool received_object_action_{};
         bool suppress_local_drop_{};
+        RC::Unreal::UObject* pending_local_drop_{};
+        struct PendingObjectTransform {
+            RC::Unreal::AActor* actor;
+            std::uint64_t object;
+            std::uint32_t player;
+            std::uint32_t epoch;
+            std::uint64_t send_at;
+            std::uint64_t send_until;
+        };
+        std::vector<PendingObjectTransform> pending_object_transforms_;
+        struct RemoteTransformActivity {
+            RC::Unreal::AActor* actor;
+            std::uint64_t last_update;
+        };
+        std::unordered_map<std::uint64_t, RemoteTransformActivity> remote_transform_activity_;
+        ccscoop::ObjectTransformOrder object_transform_order_;
+        std::unordered_map<std::uint64_t, RC::Unreal::AActor*> local_object_cache_;
+        struct WorldPose {
+            float x, y, z, qx, qy, qz, qw;
+            auto nearly_equals(const WorldPose& other) const -> bool {
+                const float position_error = std::fabs(x - other.x) + std::fabs(y - other.y) +
+                                             std::fabs(z - other.z);
+                const float quaternion_dot = std::fabs(qx * other.qx + qy * other.qy +
+                                                       qz * other.qz + qw * other.qw);
+                return position_error < 0.01f && quaternion_dot > 0.999999f;
+            }
+        };
+        std::unordered_map<std::uint64_t, WorldPose> last_world_poses_;
+        std::unordered_map<std::uint64_t, std::uint64_t> last_world_pose_sent_ms_;
+        std::uint32_t object_transform_sequence_{};
+        std::uint64_t last_world_stream_ms_{};
     };
 }
 
