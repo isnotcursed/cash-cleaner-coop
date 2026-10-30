@@ -10,6 +10,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 
 namespace
 {
@@ -90,6 +91,21 @@ namespace
                 const bool from_peer = mode_ == CoopMode::host
                     ? datagram->address == peer_address_ && datagram->port == peer_port_
                     : datagram->address == host_ && datagram->port == port_;
+                const auto object_action = ccscoop::decode_object_action(datagram->payload);
+                if (object_action)
+                {
+                    if (from_peer && object_action->session == session_)
+                    {
+                        watchdog_.activity(now);
+                        if (mode_ == CoopMode::host) handle_object_action(*object_action);
+                        else if (!received_object_action_)
+                        {
+                            RC::Output::send(STR("[CashCleanerCoop] Object authority response received\n"));
+                            received_object_action_ = true;
+                        }
+                    }
+                    continue;
+                }
                 const auto transform = ccscoop::decode_player_transform(datagram->payload);
                 if (transform)
                 {
@@ -187,6 +203,43 @@ namespace
         }
 
       private:
+        auto handle_object_action(const ccscoop::ObjectAction& action) -> void
+        {
+            const auto duplicate = object_responses_.find(action.request);
+            if (duplicate != object_responses_.end())
+            {
+                endpoint_->send(peer_address_, peer_port_, ccscoop::encode_object_action(duplicate->second));
+                return;
+            }
+
+            auto& lease = object_leases_[action.object];
+            if (lease.epoch == 0) lease.epoch = 1;
+            ccscoop::ObjectAction response{ccscoop::ObjectActionKind::pickup_denied,
+                session_, action.request, action.object, action.player, lease.epoch};
+            if (action.player == 2 && action.kind == ccscoop::ObjectActionKind::pickup_request && lease.holder == 0)
+            {
+                lease.holder = action.player;
+                ++lease.epoch;
+                response.kind = ccscoop::ObjectActionKind::pickup_granted;
+                response.epoch = lease.epoch;
+            }
+            else if (action.player == 2 && action.kind == ccscoop::ObjectActionKind::drop &&
+                     lease.holder == action.player && lease.epoch == action.epoch)
+            {
+                lease.holder = 0;
+                ++lease.epoch;
+                response.kind = ccscoop::ObjectActionKind::drop;
+                response.epoch = lease.epoch;
+            }
+            object_responses_.emplace(action.request, response);
+            endpoint_->send(peer_address_, peer_port_, ccscoop::encode_object_action(response));
+            RC::Output::send(response.kind == ccscoop::ObjectActionKind::pickup_granted
+                ? STR("[CashCleanerCoop] Object pickup granted\n")
+                : response.kind == ccscoop::ObjectActionKind::drop
+                    ? STR("[CashCleanerCoop] Object drop accepted\n")
+                    : STR("[CashCleanerCoop] Object action denied\n"));
+        }
+
         auto update_remote_ghost() -> void
         {
             if (!ghost_enabled_ || !remote_transform_ || !local_actor_) return;
@@ -289,6 +342,10 @@ namespace
         bool ghost_enabled_{};
         bool ghost_error_logged_{};
         int ghost_stage_{};
+        struct ObjectLease { std::uint32_t holder{}; std::uint32_t epoch{}; };
+        std::unordered_map<std::uint64_t, ObjectLease> object_leases_;
+        std::unordered_map<std::uint32_t, ccscoop::ObjectAction> object_responses_;
+        bool received_object_action_{};
     };
 }
 
