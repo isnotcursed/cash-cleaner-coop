@@ -65,3 +65,13 @@ authority and story state arrives intact.
 
 The `join_omit_ownership` twin strips owner and epoch data from the snapshot; the
 same scenario catches it. Current total: 8 scenarios, 7 twins, 0 failures.
+
+## Ownership handoff
+
+Handoff is a handshake rather than an immediate switch. `begin_handoff` records
+the previous owner, proposed owner, and next epoch while leaving the previous owner
+authoritative. Only an ACK from the proposed owner commits the new owner and epoch;
+an ACK from another player is rejected.
+
+The `handoff_without_ack` twin commits immediately and is caught by the same
+scenario. Current total: 9 scenarios, 8 twins, 0 failures.

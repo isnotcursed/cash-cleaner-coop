@@ -77,6 +77,20 @@ void late_join_snapshot(Faults faults = {}) {
     require(joiner.quest_stage("first_contract") == 4, "join snapshot lost quest stage");
 }
 
+void ownership_handoff(Faults faults = {}) {
+    HostWorld host(faults);
+    host.add_object(10, 0);
+    require(host.begin_handoff(10, 2), "handoff did not start");
+    require(host.handoff_pending(10), "handoff committed before ack");
+    require(host.object(10).owner == kHost, "old owner stopped before ack");
+    require(host.object(10).epoch == 1, "epoch changed before commit");
+    require(!host.acknowledge_handoff(10, 1), "wrong player ack accepted");
+    require(host.acknowledge_handoff(10, 2), "new owner ack rejected");
+    require(!host.handoff_pending(10), "handoff remained pending");
+    require(host.object(10).owner == 2, "new owner not committed");
+    require(host.object(10).epoch == 2, "commit did not bump epoch");
+}
+
 bool catches(const std::function<void()>& scenario) {
     try {
         scenario();
@@ -96,6 +110,7 @@ int main() {
         {"old_session_update", [] { old_session_update(); }},
         {"quest_idempotency", quest_is_monotonic_and_idempotent},
         {"late_join_snapshot", [] { late_join_snapshot(); }},
+        {"ownership_handoff", [] { ownership_handoff(); }},
     };
 
     int failed = 0;
@@ -114,8 +129,9 @@ int main() {
         {"pickup_no_arbitration", [] { pickup_race(Faults{false, true, false, false}); }},
         {"no_dedupe", [] { duplicate_drop(Faults{true, false, false, false}); }},
         {"accept_stale_epoch", [] { stale_owner_update(Faults{false, false, true, false}); }},
-        {"accept_old_session", [] { old_session_update(Faults{false, false, false, true, false}); }},
-        {"join_omit_ownership", [] { late_join_snapshot(Faults{false, false, false, false, true}); }},
+        {"accept_old_session", [] { old_session_update(Faults{false, false, false, true, false, false}); }},
+        {"join_omit_ownership", [] { late_join_snapshot(Faults{false, false, false, false, true, false}); }},
+        {"handoff_without_ack", [] { ownership_handoff(Faults{false, false, false, false, false, true}); }},
     };
     for (const auto& twin : twins) {
         if (catches(twin.run)) {

@@ -92,6 +92,33 @@ WorldSnapshot HostWorld::snapshot() const {
     return WorldSnapshot{session_, std::move(objects), quests_};
 }
 
+bool HostWorld::begin_handoff(EntityId id, PlayerId new_owner) {
+    auto& state = objects_.at(id);
+    if (new_owner == state.owner || handoffs_.count(id)) return false;
+    const Handoff pending{state.owner, new_owner, state.epoch + 1};
+    handoffs_.emplace(id, pending);
+    if (faults_.handoff_commit_without_ack) {
+        state.owner = new_owner;
+        state.epoch = pending.epoch;
+        handoffs_.erase(id);
+    }
+    return true;
+}
+
+bool HostWorld::acknowledge_handoff(EntityId id, PlayerId player) {
+    const auto it = handoffs_.find(id);
+    if (it == handoffs_.end() || it->second.next != player) return false;
+    auto& state = objects_.at(id);
+    state.owner = it->second.next;
+    state.epoch = it->second.epoch;
+    handoffs_.erase(it);
+    return true;
+}
+
+bool HostWorld::handoff_pending(EntityId id) const {
+    return handoffs_.count(id) != 0;
+}
+
 Replica::Replica(std::uint32_t session, Faults faults) : faults_(faults), session_(session) {}
 
 void Replica::seed(const ObjectState& state) {

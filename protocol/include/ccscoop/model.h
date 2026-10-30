@@ -21,6 +21,7 @@ struct Faults {
     bool accept_stale_epoch{};
     bool accept_old_session{};
     bool join_omit_ownership{};
+    bool handoff_commit_without_ack{};
 };
 
 struct ObjectState {
@@ -76,6 +77,9 @@ public:
 
     void load_new_session();
     WorldSnapshot snapshot() const;
+    bool begin_handoff(EntityId id, PlayerId new_owner);
+    bool acknowledge_handoff(EntityId id, PlayerId player);
+    bool handoff_pending(EntityId id) const;
 
 private:
     bool seen(RequestId request);
@@ -85,6 +89,8 @@ private:
     std::unordered_map<EntityId, ObjectState> objects_;
     std::unordered_map<std::string, std::uint32_t> quests_;
     std::unordered_set<RequestId> requests_;
+    struct Handoff { PlayerId previous; PlayerId next; std::uint32_t epoch; };
+    std::unordered_map<EntityId, Handoff> handoffs_;
 };
 
 class Replica {
