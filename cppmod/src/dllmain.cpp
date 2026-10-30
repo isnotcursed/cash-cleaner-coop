@@ -1,5 +1,4 @@
-#include <cstdio>
-
+#include <DynamicOutput/DynamicOutput.hpp>
 #include <Mod/CppUserModBase.hpp>
 
 namespace
@@ -14,12 +13,12 @@ namespace
             ModDescription = STR("Experimental co-op bootstrap for Cash Cleaner Simulator");
             ModAuthors = STR("Cash Cleaner Co-op contributors");
 
-            std::puts("[CashCleanerCoop] C++ bootstrap loaded");
+            RC::Output::send(STR("[CashCleanerCoop] C++ bootstrap loaded\n"));
         }
 
         auto on_unreal_init() -> void override
         {
-            std::puts("[CashCleanerCoop] Unreal initialized; bootstrap is passive");
+            RC::Output::send(STR("[CashCleanerCoop] Unreal initialized; bootstrap is passive\n"));
         }
     };
 }
