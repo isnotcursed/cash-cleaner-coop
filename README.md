@@ -17,8 +17,9 @@ No game files, assets, saves, logs, or decompiled code are included.
 ## Current probe
 
 `ue4ss/Mods/CashCleanerCoopProbe` is a read-only runtime inventory probe. It logs
-unique game-specific class names after a map loads. It does not read property
-values, alter actors, or inspect save contents.
+unique game-specific class names after a map loads. For a small allowlist of core
+classes, it also reads class-default networking fields and function flags. It does
+not read live actor state, alter objects, or inspect save contents.
 
 Install it into an existing UE4SS test installation:
 
