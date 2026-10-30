@@ -1,6 +1,9 @@
 add_library(ccscoop_protocol STATIC src/model.cpp src/net.cpp)
 target_include_directories(ccscoop_protocol PUBLIC include)
 target_compile_features(ccscoop_protocol PUBLIC cxx_std_17)
+if(WIN32)
+    target_link_libraries(ccscoop_protocol PUBLIC ws2_32)
+endif()
 
 add_executable(ccscoop_protocol_tests tests/model_tests.cpp tests/net_tests.cpp)
 target_link_libraries(ccscoop_protocol_tests PRIVATE ccscoop_protocol)

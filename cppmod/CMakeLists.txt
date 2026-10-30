@@ -1,7 +1,7 @@
 set(TARGET CashCleanerCoop)
 
 add_library(${TARGET} SHARED src/dllmain.cpp)
-target_link_libraries(${TARGET} PUBLIC UE4SS)
+target_link_libraries(${TARGET} PUBLIC UE4SS ccscoop_protocol)
 
 set_target_properties(${TARGET} PROPERTIES
     OUTPUT_NAME "main"

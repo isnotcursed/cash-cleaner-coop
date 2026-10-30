@@ -2,11 +2,51 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace ccscoop {
+
+enum class WireType : std::uint8_t { hello = 1, welcome = 2, heartbeat = 3 };
+
+struct WireMessage {
+    WireType type{WireType::hello};
+    std::uint32_t session{};
+    std::uint64_t nonce{};
+
+    bool operator==(const WireMessage& other) const {
+        return type == other.type && session == other.session && nonce == other.nonce;
+    }
+};
+
+std::vector<std::uint8_t> encode_wire(const WireMessage& message);
+std::optional<WireMessage> decode_wire(const std::vector<std::uint8_t>& bytes);
+
+struct Datagram {
+    std::string address;
+    std::uint16_t port{};
+    std::vector<std::uint8_t> payload;
+};
+
+class UdpEndpoint {
+public:
+    explicit UdpEndpoint(std::uint16_t local_port = 0);
+    ~UdpEndpoint();
+    UdpEndpoint(const UdpEndpoint&) = delete;
+    UdpEndpoint& operator=(const UdpEndpoint&) = delete;
+
+    bool valid() const;
+    std::uint16_t local_port() const;
+    bool send(const std::string& address, std::uint16_t port,
+              const std::vector<std::uint8_t>& payload);
+    std::optional<Datagram> receive();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 struct Packet {
     std::uint32_t seq{};

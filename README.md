@@ -5,9 +5,24 @@ Experimental co-op mod for **Cash Cleaner Simulator**.
 The project is in the reverse-engineering and protocol-design phase. It is not a
 playable multiplayer release yet.
 
-The first passive C++ bootstrap now builds and loads as a native UE4SS mod. It
-only reports its lifecycle in the log; it does not yet connect peers or alter
-game state.
+The native UE4SS bootstrap includes an opt-in IPv4/UDP host/guest handshake. It
+does not alter game state yet; without configuration it remains passive.
+
+Set these environment variables before launch to select a role:
+
+```text
+# Host
+CCSCOOP_MODE=host
+CCSCOOP_PORT=24883
+
+# Guest
+CCSCOOP_MODE=join
+CCSCOOP_HOST=192.0.2.10
+CCSCOOP_PORT=24883
+```
+
+`CCSCOOP_PORT` defaults to `24883`, and guest mode defaults to `127.0.0.1`.
+Only numeric IPv4 addresses are currently accepted.
 
 ## Compatibility baseline
 
@@ -43,6 +58,7 @@ CashCleanerCoopProbe : 1
 - [x] Runtime class inventory (524 unique classes on the compatibility baseline)
 - [x] Initial fake-world state and reliable-link model (11 scenarios, 10 twins)
 - [x] Native UE4SS C++ bootstrap DLL (runtime verified)
+- [x] Binary wire codec and real UDP host/guest handshake
 - [ ] Player avatar replication
 - [ ] Item and machine ownership
 - [ ] Quest and save-state synchronization
