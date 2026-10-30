@@ -1,6 +1,8 @@
 local PREFIX = "[CashCleanerCoopProbe]"
 local MAX_CLASSES = 5000
 local scan_scheduled = false
+local interaction_events = 0
+local MAX_INTERACTION_EVENTS = 100
 local target_classes = {
     "GameplayGameMode",
     "GameplayGameState",
@@ -155,6 +157,42 @@ local function schedule_inventory()
             inventory_live_player()
             scan_scheduled = false
         end)
+    end)
+end
+
+local function describe_hook_value(value)
+    local ok, description = pcall(function()
+        local object = value:get()
+        if object and object:IsValid() then
+            return object:GetFullName()
+        end
+        return tostring(object)
+    end)
+    return ok and description or "unavailable"
+end
+
+local function trace_interaction(name, self, ...)
+    if interaction_events >= MAX_INTERACTION_EVENTS then
+        return
+    end
+    interaction_events = interaction_events + 1
+    local parts = {name, "self=" .. describe_hook_value(self)}
+    for index, value in ipairs({...}) do
+        table.insert(parts, string.format("arg%d=%s", index, describe_hook_value(value)))
+    end
+    log("interaction " .. table.concat(parts, " "))
+end
+
+for _, target in ipairs({
+    "/Script/CashCleanerSim.PickupCharacterComponent:Pickup",
+    "/Script/CashCleanerSim.PickupCharacterComponent:Grab",
+    "/Script/CashCleanerSim.PickupCharacterComponent:Drop",
+    "/Script/CashCleanerSim.PickupCharacterComponent:Throw",
+    "/Script/CashCleanerSim.PickupObjectComponent:SetIsPickedUp",
+}) do
+    local name = target
+    RegisterHook(target, function(self, ...)
+        trace_interaction(name, self, ...)
     end)
 end
 
