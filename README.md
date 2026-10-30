@@ -5,6 +5,9 @@ Experimental co-op mod for **Cash Cleaner Simulator**.
 The project is in the reverse-engineering and protocol-design phase. It is not a
 playable multiplayer release yet.
 
+The first passive C++ bootstrap now builds as a native UE4SS mod. It only reports
+its lifecycle in the log; it does not yet connect peers or alter game state.
+
 ## Compatibility baseline
 
 - Steam App ID: `2488370`
@@ -38,6 +41,7 @@ CashCleanerCoopProbe : 1
 - [x] Isolated UE4SS boot smoke test
 - [x] Runtime class inventory (524 unique classes on the compatibility baseline)
 - [x] Initial fake-world state and reliable-link model (11 scenarios, 10 twins)
+- [x] Native UE4SS C++ bootstrap DLL
 - [ ] Player avatar replication
 - [ ] Item and machine ownership
 - [ ] Quest and save-state synchronization

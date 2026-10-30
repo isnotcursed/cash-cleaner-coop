@@ -38,3 +38,18 @@ def test_install_layout():
     mod = ROOT / "ue4ss/Mods/CashCleanerCoopProbe"
     assert (mod / "enabled.txt").is_file()
     assert (mod / "Scripts/main.lua").is_file()
+
+
+def test_cpp_bootstrap_exports_and_stays_passive():
+    source = (ROOT / "cppmod/src/dllmain.cpp").read_text(encoding="utf-8")
+    assert 'extern "C"' in source
+    assert "start_mod" in source
+    assert "uninstall_mod" in source
+    assert "on_unreal_init" in source
+    assert "StaticConstructObject" not in source
+    assert "SetPropertyValue" not in source
+
+
+def test_cpp_mod_package_layout():
+    assert (ROOT / "cppmod/enabled.txt").is_file()
+    assert (ROOT / "cppmod/CMakeLists.txt").is_file()
