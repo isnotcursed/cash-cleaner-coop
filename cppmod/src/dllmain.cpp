@@ -127,8 +127,12 @@ namespace
                             {
                                 if (object_action->kind == ccscoop::ObjectActionKind::pickup_denied)
                                     rollback_pickup(pending->second);
+                                else if (object_action->kind == ccscoop::ObjectActionKind::pickup_granted)
+                                    RC::Output::send(STR("[CashCleanerCoop] Local pickup granted by host\n"));
                                 pending_pickups_.erase(pending);
                             }
+                            if (object_action->kind == ccscoop::ObjectActionKind::drop)
+                                RC::Output::send(STR("[CashCleanerCoop] Local drop accepted by host\n"));
                             if (!received_object_action_)
                             {
                                 RC::Output::send(STR("[CashCleanerCoop] Object authority response received\n"));
@@ -265,7 +269,14 @@ namespace
                 STR("/Script/CashCleanerSim.PickupCharacterComponent:Drop"),
                 [](RC::Unreal::UnrealScriptFunctionCallableContext& context, void* data)
                 {
-                    static_cast<CashCleanerCoopMod*>(data)->on_local_drop(context.GetParams<DropParams>().object);
+                    static_cast<CashCleanerCoopMod*>(data)->on_drop_input(
+                        context.Context, context.GetParams<DropParams>().object);
+                }, no_op, this);
+            const auto throw_object = RC::Unreal::UObjectGlobals::RegisterHook(
+                STR("/Script/CashCleanerSim.PickupCharacterComponent:Throw"),
+                [](RC::Unreal::UnrealScriptFunctionCallableContext& context, void* data)
+                {
+                    static_cast<CashCleanerCoopMod*>(data)->on_drop_input(context.Context, nullptr);
                 }, no_op, this);
             const auto auto_pickup = RC::Unreal::UObjectGlobals::RegisterHook(
                 STR("/Script/CashCleanerSim.PickupCharacterComponent:AutoPickUp"), no_op,
@@ -281,7 +292,7 @@ namespace
                     static_cast<CashCleanerCoopMod*>(data)->on_automatic_pickup(
                         context.Context, STR("/Script/CashCleanerSim.PickupCharacterComponent:GetCarryingLargeObject"));
                 }, this);
-            interaction_hooks_ = {pickup, grab, drop, auto_pickup, auto_grab};
+            interaction_hooks_ = {pickup, grab, drop, throw_object, auto_pickup, auto_grab};
             RC::Output::send(STR("[CashCleanerCoop] Pickup/drop bridge hooks registered\n"));
         }
 
@@ -297,14 +308,31 @@ namespace
 
         auto on_automatic_pickup(RC::Unreal::UObject* component, const CharType* getter_path) -> void
         {
+            auto* object = get_held_object(component, getter_path);
+            if (object) on_local_pickup_object(object);
+        }
+
+        auto get_held_object(RC::Unreal::UObject* component, const CharType* getter_path)
+            -> RC::Unreal::UObject*
+        {
             auto* function = RC::Unreal::UObjectGlobals::StaticFindObject<RC::Unreal::UFunction*>(
                 nullptr, nullptr, getter_path);
-            if (!component || !function || !function->GetReturnProperty()) return;
+            if (!component || !function || !function->GetReturnProperty()) return nullptr;
             std::vector<std::uint8_t> params(function->GetParmsSize());
             component->ProcessEvent(function, params.data());
-            auto* object = *reinterpret_cast<RC::Unreal::UObject**>(
+            return *reinterpret_cast<RC::Unreal::UObject**>(
                 params.data() + function->GetReturnProperty()->GetOffset_Internal());
-            if (object) on_local_pickup_object(object);
+        }
+
+        auto on_drop_input(RC::Unreal::UObject* component, RC::Unreal::UObject* fallback) -> void
+        {
+            if (suppress_local_drop_) return;
+            auto* object = get_held_object(
+                component, STR("/Script/CashCleanerSim.PickupCharacterComponent:GetCarryingLargeObject"));
+            if (!object)
+                object = get_held_object(
+                    component, STR("/Script/CashCleanerSim.PickupCharacterComponent:GetFirstPickedUpObject"));
+            on_local_drop(object ? object : fallback);
         }
 
         auto on_local_pickup_object(RC::Unreal::UObject* value) -> void

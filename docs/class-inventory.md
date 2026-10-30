@@ -111,7 +111,7 @@ The reflected runtime signatures on the compatibility baseline are:
 - `Throw(Force: BoolProperty)`
 - `SetIsPickedUp(pickedUp: BoolProperty, grabbed: BoolProperty) -> BoolProperty`
 
-The native mod hooks `Pickup`, `Grab`, `Drop`, plus the actual input paths
+The native mod hooks `Pickup`, `Grab`, `Drop`, `Throw`, plus the actual input paths
 `AutoPickUp` and `AutoGrab`. After an automatic pickup it queries
 `GetFirstPickedUpObject` or `GetCarryingLargeObject`, derives a provisional FNV-1a
 ID from the reflected full object name, and sends the guest action through the
@@ -121,5 +121,10 @@ the resulting hook is suppressed so it cannot create an echo packet.
 An isolated guest connected to a deterministic denial peer rolled back all tested
 objects: `BP_MoneyPack_C` through `AutoPickUp`, and `BP_SmallBox_C` plus
 `BP_MoneyPile_C` through `AutoGrab`. The owner visually confirmed that each object
-fell out of the player's hands. Grant application and two-client convergence are
-still pending.
+fell out of the player's hands. Two-client convergence is still pending. A
+deterministic grant peer also verified the local positive path:
+one money pack completed grant/drop epochs `2/3`, grant/drop epochs `4/5`, and a
+third grant at epoch `6`. The owner visually confirmed take, throw, retake, place,
+and retake. `Throw` requires its own hook, while `Drop` can receive an internal
+object instead of the held actor; both hooks therefore query the component for the
+actual held object before releasing its lease.

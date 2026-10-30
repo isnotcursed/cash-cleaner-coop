@@ -25,6 +25,11 @@ CCSCOOP_GHOST=1
 ```
 
 `CCSCOOP_PORT` defaults to `24883`, and guest mode defaults to `127.0.0.1`.
+
+For a deterministic one-client authority check, run
+`python tools/object-authority-peer.py --pickup grant` and launch the isolated game
+in join mode. Use `--pickup deny` to verify rollback instead. This test peer is for
+development only; it does not replace a real host game client.
 Only numeric IPv4 addresses are currently accepted.
 The experimental ghost currently reuses the game's first-person skeletal mesh,
 which contains floating arms rather than a complete third-person body.
