@@ -164,6 +164,12 @@ std::uint64_t HostWorld::digest() const {
     return world_digest(session_, objects_, quests_, faults_.digest_omit_quests);
 }
 
+std::optional<ObjectState> HostWorld::export_object(EntityId id) const {
+    const auto it = objects_.find(id);
+    if (it == objects_.end()) return std::nullopt;
+    return it->second;
+}
+
 Replica::Replica(std::uint32_t session, Faults faults) : faults_(faults), session_(session) {}
 
 void Replica::seed(const ObjectState& state) {
@@ -218,6 +224,18 @@ std::uint32_t Replica::quest_stage(const std::string& quest) const {
 
 std::uint64_t Replica::digest() const {
     return world_digest(session_, objects_, quests_, faults_.digest_omit_quests);
+}
+
+bool Replica::repair_object(const ObjectState& state) {
+    if (faults_.repair_disabled) return false;
+    objects_[state.id] = state;
+    return true;
+}
+
+bool Replica::repair_quest(std::string quest, std::uint32_t stage) {
+    if (faults_.repair_disabled) return false;
+    quests_[std::move(quest)] = stage;
+    return true;
 }
 
 }  // namespace ccscoop

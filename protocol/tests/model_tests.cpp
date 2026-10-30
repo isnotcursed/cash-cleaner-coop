@@ -104,6 +104,22 @@ void digest_detects_quest_corruption(Faults faults = {}) {
     require(a.digest() != b.digest(), "quest corruption escaped digest");
 }
 
+void targeted_repair(Faults faults = {}) {
+    HostWorld host;
+    host.add_object(10, 123);
+    require(host.quest_stage(200, "first_contract", 4), "quest update failed");
+    auto corrupt = host.snapshot();
+    corrupt.objects[10].x_mm = 999;
+    corrupt.quests["first_contract"] = 2;
+    Replica replica(0, faults);
+    replica.load_snapshot(corrupt);
+    require(replica.digest() != host.digest(), "corruption not created");
+    require(replica.repair_object(*host.export_object(10)), "object repair rejected");
+    require(replica.repair_quest("first_contract", host.quest_stage("first_contract")),
+            "quest repair rejected");
+    require(replica.digest() == host.digest(), "targeted repair did not converge");
+}
+
 bool catches(const std::function<void()>& scenario) {
     try {
         scenario();
@@ -125,6 +141,7 @@ int main() {
         {"late_join_snapshot", [] { late_join_snapshot(); }},
         {"ownership_handoff", [] { ownership_handoff(); }},
         {"digest_detects_corruption", [] { digest_detects_quest_corruption(); }},
+        {"targeted_repair", [] { targeted_repair(); }},
     };
 
     int failed = 0;
@@ -146,7 +163,8 @@ int main() {
         {"accept_old_session", [] { old_session_update(Faults{false, false, false, true, false, false}); }},
         {"join_omit_ownership", [] { late_join_snapshot(Faults{false, false, false, false, true, false}); }},
         {"handoff_without_ack", [] { ownership_handoff(Faults{false, false, false, false, false, true, false}); }},
-        {"digest_omit_quests", [] { digest_detects_quest_corruption(Faults{false, false, false, false, false, false, true}); }},
+        {"digest_omit_quests", [] { digest_detects_quest_corruption(Faults{false, false, false, false, false, false, true, false}); }},
+        {"repair_disabled", [] { targeted_repair(Faults{false, false, false, false, false, false, false, true}); }},
     };
     for (const auto& twin : twins) {
         if (catches(twin.run)) {

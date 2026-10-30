@@ -84,3 +84,10 @@ A test silently corrupts one replica's quest stage and requires the digests to
 differ. The `digest_omit_quests` twin is caught.
 
 Current total: 10 scenarios, 9 twins, 0 failures.
+
+## Targeted repair
+
+After a digest mismatch, replicas can replace one authoritative object record or
+one quest stage from the host. A scenario corrupts both categories, repairs only
+those two keys, and requires exact digest convergence. The `repair_disabled` twin
+is caught. Current total: 11 scenarios, 10 twins, 0 failures.

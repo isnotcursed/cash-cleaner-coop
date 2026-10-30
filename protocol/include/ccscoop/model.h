@@ -23,6 +23,7 @@ struct Faults {
     bool join_omit_ownership{};
     bool handoff_commit_without_ack{};
     bool digest_omit_quests{};
+    bool repair_disabled{};
 };
 
 struct ObjectState {
@@ -82,6 +83,7 @@ public:
     bool acknowledge_handoff(EntityId id, PlayerId player);
     bool handoff_pending(EntityId id) const;
     std::uint64_t digest() const;
+    std::optional<ObjectState> export_object(EntityId id) const;
 
 private:
     bool seen(RequestId request);
@@ -106,6 +108,8 @@ public:
     void load_snapshot(const WorldSnapshot& snapshot);
     std::uint32_t quest_stage(const std::string& quest) const;
     std::uint64_t digest() const;
+    bool repair_object(const ObjectState& state);
+    bool repair_quest(std::string quest, std::uint32_t stage);
 
 private:
     Faults faults_{};
