@@ -37,7 +37,7 @@ CashCleanerCoopProbe : 1
 
 - [x] Isolated UE4SS boot smoke test
 - [x] Runtime class inventory (524 unique classes on the compatibility baseline)
-- [ ] Fake-world networking prototype
+- [x] Initial fake-world state model (5 scenarios and 4 mutation twins)
 - [ ] Player avatar replication
 - [ ] Item and machine ownership
 - [ ] Quest and save-state synchronization
@@ -48,6 +48,15 @@ CashCleanerCoopProbe : 1
 Development uses an isolated game copy and isolated Proton prefix. Back up saves
 before testing any game mod. This project does not bypass anti-cheat or online
 service restrictions.
+
+## Protocol tests
+
+The game-free C++ model covers host arbitration, idempotent requests, ownership
+epochs, session changes after host load, and monotonic quest progress:
+
+```sh
+./tools/test-protocol.sh
+```
 
 ## License
 
