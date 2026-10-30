@@ -55,3 +55,13 @@ The `no_retransmit` and `no_receive_dedupe` mutation twins are both caught.
 
 Next: connect request and state messages to two complete peer replicas, then test
 late-join snapshots and ownership handoff over the impaired link.
+
+## Late join
+
+`WorldSnapshot` atomically carries the session number, object state, current holder,
+ownership epoch, and quest stages. A late joiner test now enters after another
+player has picked up an object and advanced a quest, then verifies that all of that
+authority and story state arrives intact.
+
+The `join_omit_ownership` twin strips owner and epoch data from the snapshot; the
+same scenario catches it. Current total: 8 scenarios, 7 twins, 0 failures.

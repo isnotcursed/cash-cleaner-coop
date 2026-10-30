@@ -80,6 +80,18 @@ void HostWorld::load_new_session() {
     }
 }
 
+WorldSnapshot HostWorld::snapshot() const {
+    auto objects = objects_;
+    if (faults_.join_omit_ownership) {
+        for (auto& [id, state] : objects) {
+            (void)id;
+            state.owner = kHost;
+            state.epoch = 1;
+        }
+    }
+    return WorldSnapshot{session_, std::move(objects), quests_};
+}
+
 Replica::Replica(std::uint32_t session, Faults faults) : faults_(faults), session_(session) {}
 
 void Replica::seed(const ObjectState& state) {
@@ -118,6 +130,18 @@ const ObjectState& Replica::object(EntityId id) const {
 void Replica::start_session(std::uint32_t session) {
     session_ = session;
     objects_.clear();
+    quests_.clear();
+}
+
+void Replica::load_snapshot(const WorldSnapshot& snapshot) {
+    session_ = snapshot.session;
+    objects_ = snapshot.objects;
+    quests_ = snapshot.quests;
+}
+
+std::uint32_t Replica::quest_stage(const std::string& quest) const {
+    const auto it = quests_.find(quest);
+    return it == quests_.end() ? 0 : it->second;
 }
 
 }  // namespace ccscoop

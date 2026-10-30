@@ -20,6 +20,7 @@ struct Faults {
     bool pickup_no_arbitration{};
     bool accept_stale_epoch{};
     bool accept_old_session{};
+    bool join_omit_ownership{};
 };
 
 struct ObjectState {
@@ -28,6 +29,12 @@ struct ObjectState {
     PlayerId holder{kNobody};
     std::uint32_t epoch{1};
     std::int32_t x_mm{};
+};
+
+struct WorldSnapshot {
+    std::uint32_t session{};
+    std::unordered_map<EntityId, ObjectState> objects;
+    std::unordered_map<std::string, std::uint32_t> quests;
 };
 
 struct StateUpdate {
@@ -68,6 +75,7 @@ public:
     std::uint32_t quest_stage(const std::string& quest) const;
 
     void load_new_session();
+    WorldSnapshot snapshot() const;
 
 private:
     bool seen(RequestId request);
@@ -87,11 +95,14 @@ public:
     ApplyResult apply(const StateUpdate& update);
     const ObjectState& object(EntityId id) const;
     void start_session(std::uint32_t session);
+    void load_snapshot(const WorldSnapshot& snapshot);
+    std::uint32_t quest_stage(const std::string& quest) const;
 
 private:
     Faults faults_{};
     std::uint32_t session_{};
     std::unordered_map<EntityId, ObjectState> objects_;
+    std::unordered_map<std::string, std::uint32_t> quests_;
 };
 
 }  // namespace ccscoop

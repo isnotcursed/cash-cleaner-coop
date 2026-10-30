@@ -63,6 +63,20 @@ void quest_is_monotonic_and_idempotent() {
     require(host.quest_stage("first_contract") == 3, "quest stage went backwards");
 }
 
+void late_join_snapshot(Faults faults = {}) {
+    HostWorld host(faults);
+    host.add_object(10, 0);
+    require(host.pickup(100, 2, 10).accepted, "pickup failed");
+    require(host.quest_stage(200, "first_contract", 4), "quest update failed");
+
+    Replica joiner(0);
+    joiner.load_snapshot(host.snapshot());
+    require(joiner.object(10).owner == 2, "join snapshot lost owner");
+    require(joiner.object(10).holder == 2, "join snapshot lost holder");
+    require(joiner.object(10).epoch == 2, "join snapshot lost epoch");
+    require(joiner.quest_stage("first_contract") == 4, "join snapshot lost quest stage");
+}
+
 bool catches(const std::function<void()>& scenario) {
     try {
         scenario();
@@ -81,6 +95,7 @@ int main() {
         {"stale_owner_update", [] { stale_owner_update(); }},
         {"old_session_update", [] { old_session_update(); }},
         {"quest_idempotency", quest_is_monotonic_and_idempotent},
+        {"late_join_snapshot", [] { late_join_snapshot(); }},
     };
 
     int failed = 0;
@@ -99,7 +114,8 @@ int main() {
         {"pickup_no_arbitration", [] { pickup_race(Faults{false, true, false, false}); }},
         {"no_dedupe", [] { duplicate_drop(Faults{true, false, false, false}); }},
         {"accept_stale_epoch", [] { stale_owner_update(Faults{false, false, true, false}); }},
-        {"accept_old_session", [] { old_session_update(Faults{false, false, false, true}); }},
+        {"accept_old_session", [] { old_session_update(Faults{false, false, false, true, false}); }},
+        {"join_omit_ownership", [] { late_join_snapshot(Faults{false, false, false, false, true}); }},
     };
     for (const auto& twin : twins) {
         if (catches(twin.run)) {
