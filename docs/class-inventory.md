@@ -66,3 +66,36 @@ Clients should receive validated effect deltas, not write saves independently.
 3. Which functions perform pickup, drop, spawn, destroy, and quest completion?
 4. Which object field can serve as a persistent network identity?
 5. Can a second player pawn be spawned without loading or overwriting a save?
+
+## Network-default probe
+
+A follow-up read-only pass inspected class-default networking fields and relevant
+UFunction flags for the core allowlist.
+
+| Class | `bReplicates` | `bAlwaysRelevant` | `NetUpdateFrequency` |
+|---|---:|---:|---:|
+| `GameplayGameMode` | false | false | 10 |
+| `GameplayGameState` | true | true | 10 |
+| `GameplayPlayerController` | false | false | 100 |
+| `GameplayPlayerState` | true | true | 1 |
+| `PlayerCharacter` | true | false | 100 |
+| `InteractiveObject` | false | false | 100 |
+| `Inventory` | false | false | 100 |
+
+Pickup and physics-attachment components also report `bReplicates=false`.
+Subsystem classes are not actors/components with the same networking fields, so
+their unrelated-property reads were discarded rather than treated as values.
+
+No inspected pickup, interaction, quest, save, or world-state UFunction had the
+Unreal `FUNC_Net` flag. Relevant callable seams include:
+
+- `PickupCharacterComponent:Pickup`, `Grab`, `Drop`, `Throw`
+- `PickupObjectComponent:IsPickedUp`, `IsGrabbed`, `GetPickupTransform`
+- `PhysicsAttachCharacterComponent:AttachObject`, `DetachObject`
+- `QuestSubsystem:StartQuest`, `FinishQuest`, `OnQuestObjectiveProgressChanged`
+- `SaveSubsystem:Save`, `Load`, `BlockSave`, `DisableAutoSave`
+- `WorldStateSubsystem:RegisterWorldEvent`, `UnregisterWorldEvent`, `PostWorldMessage`
+
+Derived direction: retain Unreal replication for player/game state where it is
+already enabled, but add an explicit host-authoritative event and snapshot layer
+for interactive objects, inventory, physics ownership, quests, and persistence.
