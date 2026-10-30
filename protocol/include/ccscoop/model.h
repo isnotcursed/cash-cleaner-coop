@@ -22,6 +22,7 @@ struct Faults {
     bool accept_old_session{};
     bool join_omit_ownership{};
     bool handoff_commit_without_ack{};
+    bool digest_omit_quests{};
 };
 
 struct ObjectState {
@@ -80,6 +81,7 @@ public:
     bool begin_handoff(EntityId id, PlayerId new_owner);
     bool acknowledge_handoff(EntityId id, PlayerId player);
     bool handoff_pending(EntityId id) const;
+    std::uint64_t digest() const;
 
 private:
     bool seen(RequestId request);
@@ -103,6 +105,7 @@ public:
     void start_session(std::uint32_t session);
     void load_snapshot(const WorldSnapshot& snapshot);
     std::uint32_t quest_stage(const std::string& quest) const;
+    std::uint64_t digest() const;
 
 private:
     Faults faults_{};

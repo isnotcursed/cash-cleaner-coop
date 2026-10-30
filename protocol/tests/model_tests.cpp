@@ -91,6 +91,19 @@ void ownership_handoff(Faults faults = {}) {
     require(host.object(10).epoch == 2, "commit did not bump epoch");
 }
 
+void digest_detects_quest_corruption(Faults faults = {}) {
+    HostWorld host(faults);
+    host.add_object(10, 123);
+    require(host.quest_stage(200, "first_contract", 4), "quest update failed");
+    const auto clean = host.snapshot();
+    auto corrupt = clean;
+    corrupt.quests["first_contract"] = 3;
+    Replica a(0, faults), b(0, faults);
+    a.load_snapshot(clean);
+    b.load_snapshot(corrupt);
+    require(a.digest() != b.digest(), "quest corruption escaped digest");
+}
+
 bool catches(const std::function<void()>& scenario) {
     try {
         scenario();
@@ -111,6 +124,7 @@ int main() {
         {"quest_idempotency", quest_is_monotonic_and_idempotent},
         {"late_join_snapshot", [] { late_join_snapshot(); }},
         {"ownership_handoff", [] { ownership_handoff(); }},
+        {"digest_detects_corruption", [] { digest_detects_quest_corruption(); }},
     };
 
     int failed = 0;
@@ -131,7 +145,8 @@ int main() {
         {"accept_stale_epoch", [] { stale_owner_update(Faults{false, false, true, false}); }},
         {"accept_old_session", [] { old_session_update(Faults{false, false, false, true, false, false}); }},
         {"join_omit_ownership", [] { late_join_snapshot(Faults{false, false, false, false, true, false}); }},
-        {"handoff_without_ack", [] { ownership_handoff(Faults{false, false, false, false, false, true}); }},
+        {"handoff_without_ack", [] { ownership_handoff(Faults{false, false, false, false, false, true, false}); }},
+        {"digest_omit_quests", [] { digest_detects_quest_corruption(Faults{false, false, false, false, false, false, true}); }},
     };
     for (const auto& twin : twins) {
         if (catches(twin.run)) {

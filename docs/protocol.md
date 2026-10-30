@@ -75,3 +75,12 @@ an ACK from another player is rejected.
 
 The `handoff_without_ack` twin commits immediately and is caught by the same
 scenario. Current total: 9 scenarios, 8 twins, 0 failures.
+
+## Desync detection
+
+Host and replicas compute the same deterministic FNV-1a digest over session,
+sorted objects, owner, holder, epoch, quantized position, and sorted quest stages.
+A test silently corrupts one replica's quest stage and requires the digests to
+differ. The `digest_omit_quests` twin is caught.
+
+Current total: 10 scenarios, 9 twins, 0 failures.

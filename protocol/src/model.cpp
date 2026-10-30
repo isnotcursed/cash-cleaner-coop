@@ -2,8 +2,49 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <vector>
 
 namespace ccscoop {
+
+namespace {
+void hash_bytes(std::uint64_t& hash, const void* data, std::size_t size) {
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    for (std::size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ULL;
+    }
+}
+
+std::uint64_t world_digest(std::uint32_t session,
+                           const std::unordered_map<EntityId, ObjectState>& objects,
+                           const std::unordered_map<std::string, std::uint32_t>& quests,
+                           bool omit_quests) {
+    std::uint64_t hash = 1469598103934665603ULL;
+    hash_bytes(hash, &session, sizeof(session));
+    std::vector<EntityId> ids;
+    for (const auto& [id, state] : objects) { (void)state; ids.push_back(id); }
+    std::sort(ids.begin(), ids.end());
+    for (const auto id : ids) {
+        const auto& s = objects.at(id);
+        hash_bytes(hash, &s.id, sizeof(s.id));
+        hash_bytes(hash, &s.owner, sizeof(s.owner));
+        hash_bytes(hash, &s.holder, sizeof(s.holder));
+        hash_bytes(hash, &s.epoch, sizeof(s.epoch));
+        hash_bytes(hash, &s.x_mm, sizeof(s.x_mm));
+    }
+    if (!omit_quests) {
+        std::vector<std::string> names;
+        for (const auto& [name, stage] : quests) { (void)stage; names.push_back(name); }
+        std::sort(names.begin(), names.end());
+        for (const auto& name : names) {
+            hash_bytes(hash, name.data(), name.size());
+            const auto stage = quests.at(name);
+            hash_bytes(hash, &stage, sizeof(stage));
+        }
+    }
+    return hash;
+}
+}  // namespace
 
 HostWorld::HostWorld(Faults faults) : faults_(faults) {}
 
@@ -119,6 +160,10 @@ bool HostWorld::handoff_pending(EntityId id) const {
     return handoffs_.count(id) != 0;
 }
 
+std::uint64_t HostWorld::digest() const {
+    return world_digest(session_, objects_, quests_, faults_.digest_omit_quests);
+}
+
 Replica::Replica(std::uint32_t session, Faults faults) : faults_(faults), session_(session) {}
 
 void Replica::seed(const ObjectState& state) {
@@ -169,6 +214,10 @@ void Replica::load_snapshot(const WorldSnapshot& snapshot) {
 std::uint32_t Replica::quest_stage(const std::string& quest) const {
     const auto it = quests_.find(quest);
     return it == quests_.end() ? 0 : it->second;
+}
+
+std::uint64_t Replica::digest() const {
+    return world_digest(session_, objects_, quests_, faults_.digest_omit_quests);
 }
 
 }  // namespace ccscoop
