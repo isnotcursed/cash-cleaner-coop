@@ -40,6 +40,18 @@ The test binary prints `CAUGHT` for every twin and fails if a broken guard escap
 
 ## Next increment
 
-Add a deterministic virtual clock and lossy in-memory datagram link, then prove
-join snapshots, retransmission, reordering, and ownership handoff without running
-the game.
+The model now includes a deterministic virtual clock and in-memory datagram link
+with latency, jitter, loss, and duplication. A small reliable layer provides
+sequence numbers, acknowledgements, retry timers, ordered delivery, and duplicate
+suppression.
+
+Two additional scenarios prove that:
+
+- dropping every packet's first transmission still delivers all application
+  messages exactly once and in order through retransmission;
+- duplicating every transmission still delivers each application message once.
+
+The `no_retransmit` and `no_receive_dedupe` mutation twins are both caught.
+
+Next: connect request and state messages to two complete peer replicas, then test
+late-join snapshots and ownership handoff over the impaired link.

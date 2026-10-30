@@ -37,7 +37,7 @@ CashCleanerCoopProbe : 1
 
 - [x] Isolated UE4SS boot smoke test
 - [x] Runtime class inventory (524 unique classes on the compatibility baseline)
-- [x] Initial fake-world state model (5 scenarios and 4 mutation twins)
+- [x] Initial fake-world state and reliable-link model (7 scenarios, 6 twins)
 - [ ] Player avatar replication
 - [ ] Item and machine ownership
 - [ ] Quest and save-state synchronization

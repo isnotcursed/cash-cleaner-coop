@@ -8,6 +8,8 @@
 
 using namespace ccscoop;
 
+int run_net_tests();
+
 namespace {
 
 void require(bool condition, const char* message) {
@@ -108,6 +110,18 @@ int main() {
         }
     }
 
-    std::cout << tests.size() << " scenarios, " << twins.size() << " twins, " << failed << " failed\n";
+    try {
+        run_net_tests();
+        std::cout << "PASS reliable_loss_retransmit\n";
+        std::cout << "PASS reliable_duplicate_ordering\n";
+        std::cout << "CAUGHT no_retransmit\n";
+        std::cout << "CAUGHT no_receive_dedupe\n";
+    } catch (const std::exception& error) {
+        ++failed;
+        std::cout << "FAIL network: " << error.what() << '\n';
+    }
+
+    std::cout << tests.size() + 2 << " scenarios, " << twins.size() + 2
+              << " twins, " << failed << " failed\n";
     return failed == 0 ? 0 : 1;
 }
