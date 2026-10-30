@@ -35,7 +35,7 @@ CashCleanerCoopProbe : 1
 ## Status
 
 - [x] Isolated UE4SS boot smoke test
-- [ ] Runtime class inventory
+- [x] Runtime class inventory (524 unique classes on the compatibility baseline)
 - [ ] Fake-world networking prototype
 - [ ] Player avatar replication
 - [ ] Item and machine ownership
