@@ -9,7 +9,7 @@
 
 namespace ccscoop {
 
-enum class WireType : std::uint8_t { hello = 1, welcome = 2, heartbeat = 3 };
+enum class WireType : std::uint8_t { hello = 1, welcome = 2, heartbeat = 3, player_transform = 4 };
 
 struct WireMessage {
     WireType type{WireType::hello};
@@ -23,6 +23,24 @@ struct WireMessage {
 
 std::vector<std::uint8_t> encode_wire(const WireMessage& message);
 std::optional<WireMessage> decode_wire(const std::vector<std::uint8_t>& bytes);
+
+struct PlayerTransform {
+    std::uint32_t session{};
+    std::uint32_t player{};
+    std::uint32_t sequence{};
+    float x{};
+    float y{};
+    float z{};
+    float yaw{};
+
+    bool operator==(const PlayerTransform& other) const {
+        return session == other.session && player == other.player && sequence == other.sequence &&
+               x == other.x && y == other.y && z == other.z && yaw == other.yaw;
+    }
+};
+
+std::vector<std::uint8_t> encode_player_transform(const PlayerTransform& transform);
+std::optional<PlayerTransform> decode_player_transform(const std::vector<std::uint8_t>& bytes);
 
 struct Datagram {
     std::string address;

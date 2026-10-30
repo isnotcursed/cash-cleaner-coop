@@ -1,6 +1,7 @@
 #include "ccscoop/net.h"
 
 #include <chrono>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -88,6 +89,27 @@ void udp_loopback_round_trip() {
                 "UDP source address was wrong");
 }
 
+void player_transform_codec_is_bounded() {
+    const PlayerTransform expected{7, 2, 99, 123.25f, -456.5f, 78.0f, 179.75f};
+    const auto encoded = encode_player_transform(expected);
+    require_net(encoded.size() == 33, "player transform size changed");
+    const auto decoded = decode_player_transform(encoded);
+    require_net(decoded && *decoded == expected, "player transform did not round-trip");
+
+    auto wrong_type = encoded;
+    wrong_type[4] = static_cast<std::uint8_t>(WireType::heartbeat);
+    require_net(!decode_player_transform(wrong_type), "wrong transform type was accepted");
+    require_net(!decode_player_transform(encode_player_transform(
+                    {0, 2, 99, 1.0f, 2.0f, 3.0f, 4.0f})),
+                "zero session transform was accepted");
+    require_net(!decode_player_transform(encode_player_transform(
+                    {7, 2, 99, std::numeric_limits<float>::quiet_NaN(), 2.0f, 3.0f, 4.0f})),
+                "NaN transform was accepted");
+    require_net(!decode_player_transform(encode_player_transform(
+                    {7, 2, 99, 200000000.0f, 2.0f, 3.0f, 4.0f})),
+                "unbounded transform was accepted");
+}
+
 template <class Scenario>
 bool caught(const Scenario& scenario) {
     try { scenario(); return false; } catch (const std::exception&) { return true; }
@@ -100,6 +122,7 @@ int run_net_tests() {
     duplicates_are_deduped();
     wire_codec_rejects_bad_packets();
     udp_loopback_round_trip();
+    player_transform_codec_is_bounded();
     require_net(caught([] { loss_retransmit(NetFaults{true, false}); }),
                 "mutation twin no_retransmit escaped");
     require_net(caught([] { duplicates_are_deduped(NetFaults{false, true}); }),

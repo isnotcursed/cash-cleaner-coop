@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <utility>
 
@@ -21,6 +22,8 @@ namespace ccscoop {
 namespace {
 constexpr std::array<std::uint8_t, 4> kMagic{{'C', 'C', 'S', 1}};
 constexpr std::size_t kWireSize = 17;
+constexpr std::size_t kTransformSize = 33;
+constexpr float kMaxCoordinate = 100000000.0f;
 
 void write_u32(std::vector<std::uint8_t>& out, std::uint32_t value) {
     for (int shift = 24; shift >= 0; shift -= 8) out.push_back(static_cast<std::uint8_t>(value >> shift));
@@ -41,6 +44,20 @@ std::uint64_t read_u64(const std::uint8_t* p) {
     for (int i = 0; i < 8; ++i) value = (value << 8) | p[i];
     return value;
 }
+
+void write_float(std::vector<std::uint8_t>& out, float value) {
+    std::uint32_t bits{};
+    static_assert(sizeof(bits) == sizeof(value));
+    std::memcpy(&bits, &value, sizeof(bits));
+    write_u32(out, bits);
+}
+
+float read_float(const std::uint8_t* p) {
+    const auto bits = read_u32(p);
+    float value{};
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
 }  // namespace
 
 std::vector<std::uint8_t> encode_wire(const WireMessage& message) {
@@ -57,6 +74,34 @@ std::optional<WireMessage> decode_wire(const std::vector<std::uint8_t>& bytes) {
     if (raw_type < static_cast<std::uint8_t>(WireType::hello) ||
         raw_type > static_cast<std::uint8_t>(WireType::heartbeat)) return std::nullopt;
     return WireMessage{static_cast<WireType>(raw_type), read_u32(bytes.data() + 5), read_u64(bytes.data() + 9)};
+}
+
+std::vector<std::uint8_t> encode_player_transform(const PlayerTransform& transform) {
+    std::vector<std::uint8_t> out(kMagic.begin(), kMagic.end());
+    out.push_back(static_cast<std::uint8_t>(WireType::player_transform));
+    write_u32(out, transform.session);
+    write_u32(out, transform.player);
+    write_u32(out, transform.sequence);
+    write_float(out, transform.x);
+    write_float(out, transform.y);
+    write_float(out, transform.z);
+    write_float(out, transform.yaw);
+    return out;
+}
+
+std::optional<PlayerTransform> decode_player_transform(const std::vector<std::uint8_t>& bytes) {
+    if (bytes.size() != kTransformSize || !std::equal(kMagic.begin(), kMagic.end(), bytes.begin()) ||
+        bytes[4] != static_cast<std::uint8_t>(WireType::player_transform)) return std::nullopt;
+    PlayerTransform result{read_u32(bytes.data() + 5), read_u32(bytes.data() + 9),
+                           read_u32(bytes.data() + 13), read_float(bytes.data() + 17),
+                           read_float(bytes.data() + 21), read_float(bytes.data() + 25),
+                           read_float(bytes.data() + 29)};
+    if (result.session == 0 || result.player == 0 || result.sequence == 0 ||
+        !std::isfinite(result.x) || !std::isfinite(result.y) || !std::isfinite(result.z) ||
+        !std::isfinite(result.yaw) || std::fabs(result.x) > kMaxCoordinate ||
+        std::fabs(result.y) > kMaxCoordinate || std::fabs(result.z) > kMaxCoordinate ||
+        std::fabs(result.yaw) > 360000.0f) return std::nullopt;
+    return result;
 }
 
 struct UdpEndpoint::Impl {
